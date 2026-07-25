@@ -187,4 +187,52 @@ final class CaretLocatorTests: XCTestCase {
         let location = CaretLocation(rectQuartz: nil, pid: 123)
         XCTAssertFalse(location.isSecureField)
     }
+
+    // MARK: - caretAnchor
+
+    // A native text field answers a collapsed selection with a zero-width
+    // rect, so both edges are the caret and the anchor is unambiguous.
+    func testACollapsedRectAnchorsAtItsOwnPosition() {
+        let anchored = CaretLocator.caretAnchor(
+            for: CGRect(x: 19, y: 885, width: 0, height: 17))
+        XCTAssertEqual(anchored.minX, 19)
+        XCTAssertEqual(anchored.minY, 885)
+        XCTAssertEqual(anchored.height, 17)
+    }
+
+    // Some implementations report the character behind the caret, where the
+    // trailing edge is the insertion point.
+    func testASingleCharacterWideRectAnchorsOnItsTrailingEdge() {
+        let anchored = CaretLocator.caretAnchor(
+            for: CGRect(x: 100, y: 200, width: 8, height: 17))
+        XCTAssertEqual(anchored.minX, 108)
+    }
+
+    // Measured in a browser compose box: WebKit answers a collapsed marker
+    // range with the whole line. Anchoring on the trailing edge put the panel
+    // 427pt away at the field's right margin.
+    func testAWholeLineRectAnchorsOnItsLeadingEdge() {
+        let anchored = CaretLocator.caretAnchor(
+            for: CGRect(x: 731, y: 882, width: 427, height: 20))
+        XCTAssertEqual(anchored.minX, 731)
+        XCTAssertEqual(anchored.minY, 882)
+    }
+
+    func testTheAnchorSwitchesEdgesAtTheCaretWidthThreshold() {
+        let atThreshold = CaretLocator.caretAnchor(
+            for: CGRect(x: 50, y: 0, width: CaretLocator.maxCaretLikeWidth, height: 17))
+        XCTAssertEqual(atThreshold.minX, 50 + CaretLocator.maxCaretLikeWidth)
+
+        let justOver = CaretLocator.caretAnchor(
+            for: CGRect(x: 50, y: 0, width: CaretLocator.maxCaretLikeWidth + 1, height: 17))
+        XCTAssertEqual(justOver.minX, 50)
+    }
+
+    func testTheAnchorAlwaysReportsAHairlineWidth() {
+        for width in [CGFloat(0), 8, 427] {
+            let anchored = CaretLocator.caretAnchor(
+                for: CGRect(x: 10, y: 10, width: width, height: 17))
+            XCTAssertEqual(anchored.width, 1, "width \(width)")
+        }
+    }
 }

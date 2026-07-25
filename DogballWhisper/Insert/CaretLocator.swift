@@ -82,6 +82,27 @@ enum CaretLocator {
         plausibleCaretHeightRange.contains(rect.height)
     }
 
+    /// Widest a reported rect can be and still plausibly *be* the caret, or
+    /// the single character behind it.
+    static let maxCaretLikeWidth: CGFloat = 25
+
+    /// Collapse a reported text rect onto the insertion point.
+    ///
+    /// A collapsed selection usually comes back zero-width, and some
+    /// implementations answer with the bounds of the character *preceding*
+    /// the caret instead — in both of those cases the trailing edge is where
+    /// the caret sits. But WebKit and Chromium frequently answer a collapsed
+    /// marker range with the bounds of the whole line: measured in a browser
+    /// compose box, w=427 for the same gesture that gives w=0 in a native
+    /// text field. Anchoring such a rect on its trailing edge parks the panel
+    /// at the field's right margin, far from the caret. Past about one
+    /// character of width the rect is a line, not a caret, so the leading
+    /// edge is the better guess.
+    static func caretAnchor(for rect: CGRect) -> CGRect {
+        let x = rect.width <= maxCaretLikeWidth ? rect.maxX : rect.minX
+        return CGRect(x: x, y: rect.minY, width: 1, height: rect.height)
+    }
+
     /// True when any app has secure event input engaged: a `sudo`/`ssh`/`gpg`
     /// prompt in a terminal, a `SecurityAgent` authorization dialog, a
     /// browser password field. This is the cheap half of the secure check —
@@ -169,15 +190,23 @@ enum CaretLocator {
             break
         }
 
+        // Geometry only, never text: which tier answered and what it said is
+        // the difference between a caret rect and a whole-line rect we
+        // anchored at the wrong end, and that cannot be told apart from
+        // outside the process.
         if let rect = caretRectViaTextMarker(element), isPlausibleCaretRect(rect) {
+            Diagnostics.log("caret tier=textMarker rect=\(Diagnostics.describe(rect))")
             return CaretLocation(rectQuartz: rect, pid: pid)
         }
         if let rect = caretRectViaSelectedRange(element), isPlausibleCaretRect(rect) {
+            Diagnostics.log("caret tier=selectedRange rect=\(Diagnostics.describe(rect))")
             return CaretLocation(rectQuartz: rect, pid: pid)
         }
         if let rect = caretRectFromElementFrame(element) {
+            Diagnostics.log("caret tier=elementFrame rect=\(Diagnostics.describe(rect))")
             return CaretLocation(rectQuartz: rect, pid: pid)
         }
+        Diagnostics.log("caret tier=none")
         return CaretLocation(rectQuartz: nil, pid: pid)
     }
 
@@ -463,7 +492,13 @@ enum CaretLocator {
         // come back zero-width at either edge. Anchor on the trailing edge
         // with an explicit hairline width rather than trusting the
         // reported width, which is frequently 0.
-        return CGRect(x: cgRect.maxX, y: cgRect.minY, width: 1, height: cgRect.height)
+        //
+        // The raw width matters: a genuinely collapsed caret is ~0 wide, so
+        // both edges agree. A wide rect means the app answered with the whole
+        // line or field instead, and then the trailing edge is the right-hand
+        // end of the box rather than where the caret sits.
+        Diagnostics.log("caret raw textMarker=\(Diagnostics.describe(cgRect))")
+        return caretAnchor(for: cgRect)
     }
 
     // MARK: - Tier 2: AppKit AXBoundsForRange
@@ -490,7 +525,8 @@ enum CaretLocator {
         var rect = CGRect.zero
         guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect), isFiniteRect(rect), rect.height > 0
         else { return nil }
-        return rect
+        Diagnostics.log("caret raw selectedRange=\(Diagnostics.describe(rect))")
+        return caretAnchor(for: rect)
     }
 
     // MARK: - Tier 3: the focused element's own frame

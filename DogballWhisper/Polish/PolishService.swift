@@ -57,7 +57,13 @@ final class PolishService: TextCleaning {
     }
 
     func clean(_ text: String, prompt: String, model: String) async throws -> String {
-        guard let key = keyProvider(), !key.isEmpty else { throw PolishError.missingAPIKey }
+        guard let key = keyProvider(), !key.isEmpty else {
+            // Never log the key. Its presence and length are enough to tell a
+            // missing key apart from a malformed one.
+            Diagnostics.log("openrouter: no API key found in the keychain")
+            throw PolishError.missingAPIKey
+        }
+        Diagnostics.log("openrouter: requesting \(model), key present (\(key.count) chars)")
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

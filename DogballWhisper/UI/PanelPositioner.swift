@@ -5,7 +5,7 @@ import CoreGraphics
 enum PanelPositioner {
     /// A compact pill rather than a card. Wide enough for "Copied to clipboard"
     /// at 11pt and for the level bars, and no wider.
-    static let panelSize = CGSize(width: 148, height: 34)
+    static let panelSize = CGSize(width: 104, height: 34)
     static let caretGap: CGFloat = 10
     static let edgeInset: CGFloat = 8
     static let bottomInset: CGFloat = 120

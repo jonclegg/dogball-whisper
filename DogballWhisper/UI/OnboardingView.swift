@@ -176,7 +176,13 @@ struct OnboardingView: View {
             }
         }
         .padding(20)
-        .onAppear { poller.refresh() }
+        .onAppear {
+            poller.refresh()
+            // Show the key that is already stored, so running setup a second
+            // time does not present an empty field that looks like there is
+            // no key.
+            apiKey = KeychainStore.read() ?? ""
+        }
     }
 
     private var canFinish: Bool {

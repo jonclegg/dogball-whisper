@@ -16,9 +16,17 @@ enum KeychainStore {
     }
 
     @discardableResult
+    /// Saving an empty string is a no-op, not a deletion.
+    ///
+    /// This used to delete: onboarding calls `save` unconditionally when you
+    /// press "Start dictating", and its field does not prefill from the
+    /// keychain, so re-running setup with an already-stored key wiped it — the
+    /// key silently vanished and cleanup then failed on every dictation with
+    /// nothing on screen to explain why. Clearing the key is an explicit act;
+    /// use `delete()`.
     static func save(_ key: String) -> Bool {
-        delete()
         guard !key.isEmpty else { return true }
+        delete()
         var query = baseQuery
         query[kSecValueData as String] = Data(key.utf8)
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock

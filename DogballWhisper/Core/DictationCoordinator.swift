@@ -344,16 +344,47 @@ final class DictationCoordinator {
     /// after `abort()` had already returned the coordinator to `.idle`,
     /// leaving it permanently busy with no work left to move it out again.
     private func cleanIfEnabled(_ text: String, token: Int) async -> String {
-        guard preferences.cleanupEnabled, let cleaner else { return text }
-        guard isCurrent(token) else { return text }
+        guard preferences.cleanupEnabled else {
+            Diagnostics.log("cleanup skipped: disabled in settings")
+            return text
+        }
+        guard let cleaner else {
+            Diagnostics.log("cleanup skipped: no cleaner wired up")
+            return text
+        }
+        guard isCurrent(token) else {
+            Diagnostics.log("cleanup skipped: pipeline superseded")
+            return text
+        }
         state = .polishing
         let prompt = preferences.cleanupPrompt
         let model = preferences.cleanupModelID
+        Diagnostics.log(
+            "cleanup starting: model=\(model) promptChars=\(prompt.count) textChars=\(text.count) timeout=\(config.cleanupTimeout)s")
+        let started = Date()
         do {
-            return try await withTimeout(seconds: config.cleanupTimeout) {
+            let cleaned = try await withTimeout(seconds: config.cleanupTimeout) {
                 try await cleaner.clean(text, prompt: prompt, model: model)
             }
+            let elapsed = Date().timeIntervalSince(started)
+            Diagnostics.log(
+                "cleanup ok in \(Int(elapsed * 1000))ms: \(text.count) -> \(cleaned.count) chars")
+            return cleaned
+        } catch is TimedOutError {
+            // The most likely cause of "cleanup stopped working": the request
+            // is fine but slower than the budget, so every dictation silently
+            // falls back to the raw transcript.
+            Diagnostics.log(
+                "cleanup TIMED OUT after \(config.cleanupTimeout)s, inserting the raw transcript")
+            return text
         } catch {
+            let elapsed = Date().timeIntervalSince(started)
+            // Error descriptions here are ours (PolishError) or URLError, and
+            // carry no key: the key only ever goes into an Authorization
+            // header. A provider's response body is truncated by PolishService
+            // before it reaches this point.
+            Diagnostics.log(
+                "cleanup FAILED after \(Int(elapsed * 1000))ms: \(error.localizedDescription)")
             return text
         }
     }

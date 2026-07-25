@@ -42,7 +42,9 @@ protocol AudioRecording: AnyObject {
 /// there; the actual hardware work happens on `prewarmQueue` and the result
 /// is handed back via `DispatchQueue.main.async`.
 final class AudioRecorder: AudioRecording {
-    static let levelWindowSize = 40
+    /// Sized so the bars fill the panel's width without being squeezed into
+    /// hairlines: 28 bars at 1.5pt with 1pt gaps is 69pt inside a 104pt pill.
+    static let levelWindowSize = 28
     static let meterWarmUp: TimeInterval = 0.3
 
     private static let pcmSettings: [String: Any] = [

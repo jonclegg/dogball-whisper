@@ -20,21 +20,14 @@ final class Preferences {
 
     static let defaultCleanupModelID = "anthropic/claude-haiku-4.5"
 
+    /// Kept deliberately short. Every character here is input the cleanup model
+    /// reads before it can answer, and this call sits between the user letting
+    /// go of the key and the text appearing, so prompt length is felt directly.
     static let defaultCleanupPrompt = """
-        Clean up this dictated text. Remove filler words (um, uh, like, you know), \
-        false starts, stutters, and repeated words. Fix punctuation and capitalization.
-
-        The speaker is a software developer, and speech recognition regularly \
-        mishears technical vocabulary as ordinary English. When a word only makes \
-        sense as a mistranscription, replace it with the term a developer plainly \
-        meant. For example "merge it to Maine" is "merge it to main", "guess pull" \
-        is "git pull", "pull request" may arrive as "pole request", and repo, \
-        commit, branch, rebase, async, API, JSON, Swift, and macOS are frequently \
-        garbled. Only make the substitution when the developer reading is clearly \
-        the intended one, and leave the word alone when it is genuinely ambiguous.
-
-        Otherwise do not rephrase, reorder, summarize, or add anything. Keep the \
-        speaker's exact wording and voice. Return only the cleaned text.
+        Remove filler words, false starts, stutters, and repeated words. Fix \
+        punctuation and capitalization. The speaker is a developer: fix misheard \
+        technical terms ("Maine" is "main", "guess" is "git"). Do not rephrase or \
+        add anything. Return only the cleaned text.
         """
 
     private let defaults: UserDefaults
