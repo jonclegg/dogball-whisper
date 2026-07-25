@@ -30,4 +30,17 @@ final class EngineIntegrationTests: XCTestCase {
             XCTAssertEqual(error as? TranscriptionError, .notLoaded)
         }
     }
+
+    func testWhisperKitTranscribesTheFixture() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["RUN_ENGINE_IT"] == "1")
+        let engine = WhisperKitEngine(variant: "openai_whisper-base.en")
+        try await engine.load()
+
+        let text = try await engine.transcribe(try fixtureURL())
+        XCTAssertTrue(text.lowercased().contains("hello"), "got: \(text)")
+        XCTAssertTrue(
+            ModelCatalog.isInstalled(
+                try XCTUnwrap(ModelCatalog.descriptor(id: "whisper-base-en"))),
+            "download landed somewhere other than the expected folder")
+    }
 }

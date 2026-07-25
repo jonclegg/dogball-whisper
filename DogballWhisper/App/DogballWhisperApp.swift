@@ -16,16 +16,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var coordinator: DictationCoordinator?
     private var monitor: HotkeyMonitor?
-    private var engine: TranscriptionEngine?
     private var panel: DictationPanelController?
-    private let preferences = Preferences()
+    private let preferences: Preferences
+    let models: ModelManager
+
+    override init() {
+        let preferences = Preferences()
+        self.preferences = preferences
+        self.models = ModelManager(preferences: preferences)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menuBar = MenuBarController()
         self.menuBar = menuBar
-
-        let engine = ParakeetEngine()
-        self.engine = engine
 
         let panel = DictationPanelController()
         self.panel = panel
@@ -36,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let coordinator = DictationCoordinator(
             recorder: recorder,
-            engineProvider: { [weak self] in self?.engine },
+            engineProvider: { [weak self] in self?.models.activeEngine },
             inserter: PasteboardTextInserter(),
             cleaner: PolishService(),
             presenter: panel,
@@ -58,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Hotkey monitor failed: \(error.localizedDescription)")
         }
 
-        // Load the model up front so the first dictation is not slow.
-        Task { try? await engine.load() }
+        // Load the active model up front so the first dictation is not slow.
+        Task { await models.loadActiveEngine() }
     }
 }
