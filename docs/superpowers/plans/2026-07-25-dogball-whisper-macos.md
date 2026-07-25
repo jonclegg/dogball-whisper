@@ -1307,14 +1307,15 @@ In `project.yml`, under the app target's `sources`, the whole `DogballWhisper` d
         buildPhase: resources
 ```
 
-Record the fixture (say the words "hello there" clearly):
+Synthesize the fixture with macOS's own speech synthesizer. This needs no
+microphone, so it works headlessly and gives every run byte-identical audio:
 
 ```bash
 mkdir -p Tests/Fixtures
-# Record ~2 seconds of speech at 16kHz mono:
-sox -d -r 16000 -c 1 -b 16 Tests/Fixtures/hello.wav trim 0 2
-# If sox is unavailable: use QuickTime Player > New Audio Recording, then
-# afconvert -f WAVE -d LEI16@16000 -c 1 input.m4a Tests/Fixtures/hello.wav
+say -v Samantha -o /tmp/hello.aiff "Hello there, this is a test of the dictation engine."
+afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/hello.aiff Tests/Fixtures/hello.wav
+rm /tmp/hello.aiff
+afinfo Tests/Fixtures/hello.wav   # confirm 16000 Hz, 1 channel, 16-bit
 ```
 
 - [ ] **Step 3: Add the mirror tests**
