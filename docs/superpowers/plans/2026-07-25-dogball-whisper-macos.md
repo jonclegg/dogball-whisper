@@ -328,7 +328,7 @@ git commit -m "feat: menu-bar app skeleton with headless build script"
 - Produces:
   - `final class Preferences` with `init(defaults: UserDefaults = .standard)` and mutable properties `hotkeyBinding: HotkeyBinding` (defined in Task 3 — until then, store `Data`), `activeModelID: String?`, `cleanupEnabled: Bool`, `cleanupModelID: String`, `cleanupPrompt: String`, `insertionMode: InsertionMode`, `hasCompletedOnboarding: Bool`. Static `Preferences.defaultCleanupPrompt: String` and `Preferences.defaultCleanupModelID: String`.
   - `enum InsertionMode: String, Codable { case paste, clipboardOnly }`
-  - `enum KeychainStore` with `static func save(_ key: String) throws`, `static func read() -> String?`, `static func delete()`.
+  - `enum KeychainStore` with `@discardableResult static func save(_ key: String) -> Bool`, `static func read() -> String?`, `@discardableResult static func delete() -> Bool`.
 
 - [ ] **Step 1: Write the failing tests**
 
