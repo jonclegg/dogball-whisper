@@ -18,6 +18,7 @@ protocol TextCleaning: Sendable {
     func clean(_ text: String, prompt: String, model: String) async throws -> String
 }
 
+@MainActor
 protocol DictationPresenting: AnyObject {
     func present(state: DictationState, at location: CaretLocation, levels: [Float])
     func dismiss(after: TimeInterval)

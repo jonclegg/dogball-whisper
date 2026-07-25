@@ -11,28 +11,35 @@ enum DogballWhisperMain {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var coordinator: DictationCoordinator?
     private var monitor: HotkeyMonitor?
     private var engine: TranscriptionEngine?
+    private var panel: DictationPanelController?
     private let preferences = Preferences()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menuBar = MenuBarController()
         self.menuBar = menuBar
 
-        // Task 8 replaces this with the floating panel.
-        let presenter = LoggingPresenter()
         let engine = ParakeetEngine()
         self.engine = engine
 
+        let panel = DictationPanelController()
+        self.panel = panel
+
+        let recorder = AudioRecorder(onLevels: { levels in
+            MainActor.assumeIsolated { panel.updateLevels(levels) }
+        })
+
         let coordinator = DictationCoordinator(
-            recorder: AudioRecorder(),
+            recorder: recorder,
             engineProvider: { [weak self] in self?.engine },
             inserter: PasteboardTextInserter(),
             cleaner: nil,
-            presenter: presenter,
+            presenter: panel,
             preferences: preferences
         )
         coordinator.onStateChange = { [weak menuBar] state in
@@ -54,12 +61,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Load the model up front so the first dictation is not slow.
         Task { try? await engine.load() }
     }
-}
-
-/// Placeholder presenter until the floating panel lands in Task 8.
-final class LoggingPresenter: DictationPresenting {
-    func present(state: DictationState, at location: CaretLocation, levels: [Float]) {
-        NSLog("state: \(state)")
-    }
-    func dismiss(after: TimeInterval) {}
 }
