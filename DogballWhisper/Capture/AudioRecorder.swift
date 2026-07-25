@@ -15,7 +15,7 @@ protocol AudioRecording: AnyObject {
 /// Records 16kHz mono PCM straight to a WAV file, which is exactly what both
 /// transcription engines want. There is no AVAudioSession on macOS, so there is
 /// nothing to configure or tear down around each recording.
-final class AudioRecorder: NSObject, AudioRecording {
+final class AudioRecorder: AudioRecording {
     static let levelWindowSize = 40
     static let meterWarmUp: TimeInterval = 0.3
 
@@ -29,6 +29,8 @@ final class AudioRecorder: NSObject, AudioRecording {
     init(onLevels: @escaping ([Float]) -> Void = { _ in }) {
         self.onLevels = onLevels
     }
+
+    deinit { timer?.invalidate() }
 
     static func requestPermission() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
@@ -49,6 +51,10 @@ final class AudioRecorder: NSObject, AudioRecording {
     }
 
     func start() throws {
+        // A second start would otherwise leak the running timer and abandon the
+        // first recording's file, which nothing would ever delete.
+        if recorder != nil { cancel() }
+
         let url = Self.recordingsDirectory.appendingPathComponent("\(UUID().uuidString).wav")
 
         let settings: [String: Any] = [
@@ -71,6 +77,8 @@ final class AudioRecorder: NSObject, AudioRecording {
         timer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak self] _ in
             self?.sampleMeter()
         }
+        // .common keeps the meter firing while a menu is tracking or a modal run
+        // loop is active, instead of freezing whenever the app's UI is doing that.
         RunLoop.main.add(timer!, forMode: .common)
     }
 

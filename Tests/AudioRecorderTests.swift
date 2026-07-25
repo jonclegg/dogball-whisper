@@ -30,6 +30,11 @@ final class AudioRecorderTests: XCTestCase {
         XCTAssertNil(recorder.stop())
     }
 
+    func testCancelWithoutStartIsASafeNoOp() {
+        let recorder = AudioRecorder()
+        recorder.cancel()
+    }
+
     // Guards the contract the engines depend on: a real 16kHz mono WAV on disk.
     // Needs mic permission, so it is opt-in: RUN_AUDIO_IT=1 ./scripts/test.sh
     func testRecordsA16kMonoWavFile() async throws {
