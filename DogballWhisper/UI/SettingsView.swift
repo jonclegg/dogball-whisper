@@ -293,6 +293,10 @@ private struct CleanupSettingsTab: View {
                     sample, prompt: prompt, model: modelID)
                 testResult = cleaned
             } catch {
+                // `PolishError` describes itself by status and cause, never
+                // by the provider's response body: providers echo submitted
+                // text back in moderation rejections, and this string is put
+                // on screen and can be copied out of it.
                 testResult = error.localizedDescription
             }
             isTesting = false

@@ -161,8 +161,10 @@ final class PolishServiceTests: XCTestCase {
 
     // Measured against the real endpoint: google/gemini-3.5-flash answers a
     // disabled-reasoning request with 400 "Reasoning is mandatory for this
-    // endpoint and cannot be disabled." A dictation must not be lost over a
-    // latency optimisation, so that specific rejection triggers one retry.
+    // endpoint and cannot be disabled." That rejection is deliberately not
+    // retried without the field — a model that mandates reasoning is too slow
+    // for this call either way — so it is turned into `requiresReasoning` and
+    // thrown, which says what is wrong instead of timing out silently.
     func testAMandatoryReasoningRejectionIsRecognised() {
         XCTAssertTrue(PolishService.disablingReasoningRejected(
             status: 400,
@@ -178,5 +180,46 @@ final class PolishServiceTests: XCTestCase {
         // outage, and retrying without the field will not help.
         XCTAssertFalse(PolishService.disablingReasoningRejected(
             status: 500, body: "reasoning service unavailable"))
+    }
+
+    // The recogniser above is only half of it: `clean()` has to actually turn
+    // that response into `requiresReasoning`, which is what puts the model's
+    // name in front of the user instead of leaving cleanup quietly broken.
+    func testCleanThrowsRequiresReasoningOnThatRejection() async {
+        StubURLProtocol.stub.statusCode = 400
+        StubURLProtocol.stub.body = Data(
+            #"{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}"#.utf8)
+        do {
+            _ = try await makeService().clean("x", prompt: "p", model: "google/gemini-3.5-flash")
+            XCTFail("expected requiresReasoning")
+        } catch {
+            XCTAssertEqual(error as? PolishError, .requiresReasoning("google/gemini-3.5-flash"))
+        }
+    }
+
+    func testAnOrdinary400IsNotConvertedIntoARequiresReasoningError() async {
+        StubURLProtocol.stub.statusCode = 400
+        StubURLProtocol.stub.body = Data(#"{"error":{"message":"invalid model"}}"#.utf8)
+        do {
+            _ = try await makeService().clean("x", prompt: "p", model: "m")
+            XCTFail("expected http error")
+        } catch {
+            guard case let .http(code, _)? = error as? PolishError else {
+                return XCTFail("got \(error)")
+            }
+            XCTAssertEqual(code, 400)
+        }
+    }
+
+    // Providers echo the submitted text back in moderation rejections, and
+    // this description is both logged and shown in Settings > Cleanup > Test,
+    // so the response body must not reach it.
+    func testTheDescribedHTTPErrorCarriesTheStatusButNotTheResponseBody() throws {
+        let error = PolishError.http(
+            403, #"{"error":{"message":"flagged: so um I was thinking we could ship it"}}"#)
+        let described = try XCTUnwrap(error.errorDescription)
+        XCTAssertTrue(described.contains("403"))
+        XCTAssertFalse(described.contains("flagged"))
+        XCTAssertFalse(described.contains("ship it"))
     }
 }

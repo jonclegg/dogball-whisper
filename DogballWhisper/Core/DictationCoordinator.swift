@@ -230,8 +230,14 @@ final class DictationCoordinator {
     /// prompt from an app that left secure event input engaged behind it
     /// (Terminal's "Secure Keyboard Entry" being the usual suspect) when a
     /// user reports dictation refusing everywhere.
+    ///
+    /// Verbose, not a plain log, even though it is a refusal: at `notice`
+    /// with `.public` this persists for days, and a durable record of the
+    /// moments a user was sitting at a password prompt is worth more to an
+    /// attacker than it is to us. Someone chasing a stuck refusal turns the
+    /// flag on and reproduces it.
     private func refuseSecureField(reason: String) {
-        Diagnostics.log("dictation refused: \(reason)")
+        Diagnostics.verbose("dictation refused: \(reason)")
         notice("Not in a password field")
     }
 
@@ -314,7 +320,7 @@ final class DictationCoordinator {
         // business writing what you said into the system log. A cleaned length
         // near twice the raw length points at the cleanup model; equal lengths
         // with doubled text on screen point at the paste being delivered twice.
-        Diagnostics.log(
+        Diagnostics.verbose(
             "dictation \(token): raw=\(trimmed.count) final=\(finalText.count) insert#\(Diagnostics.nextInsertSequence())")
 
         let outcome = inserter.insert(
@@ -345,21 +351,21 @@ final class DictationCoordinator {
     /// leaving it permanently busy with no work left to move it out again.
     private func cleanIfEnabled(_ text: String, token: Int) async -> String {
         guard preferences.cleanupEnabled else {
-            Diagnostics.log("cleanup skipped: disabled in settings")
+            Diagnostics.verbose("cleanup skipped: disabled in settings")
             return text
         }
         guard let cleaner else {
-            Diagnostics.log("cleanup skipped: no cleaner wired up")
+            Diagnostics.verbose("cleanup skipped: no cleaner wired up")
             return text
         }
         guard isCurrent(token) else {
-            Diagnostics.log("cleanup skipped: pipeline superseded")
+            Diagnostics.verbose("cleanup skipped: pipeline superseded")
             return text
         }
         state = .polishing
         let prompt = preferences.cleanupPrompt
         let model = preferences.cleanupModelID
-        Diagnostics.log(
+        Diagnostics.verbose(
             "cleanup starting: model=\(model) promptChars=\(prompt.count) textChars=\(text.count) timeout=\(config.cleanupTimeout)s")
         let started = Date()
         do {
@@ -367,7 +373,7 @@ final class DictationCoordinator {
                 try await cleaner.clean(text, prompt: prompt, model: model)
             }
             let elapsed = Date().timeIntervalSince(started)
-            Diagnostics.log(
+            Diagnostics.verbose(
                 "cleanup ok in \(Int(elapsed * 1000))ms: \(text.count) -> \(cleaned.count) chars")
             return cleaned
         } catch is TimedOutError {
@@ -379,12 +385,13 @@ final class DictationCoordinator {
             return text
         } catch {
             let elapsed = Date().timeIntervalSince(started)
-            // Error descriptions here are ours (PolishError) or URLError, and
-            // carry no key: the key only ever goes into an Authorization
-            // header. A provider's response body is truncated by PolishService
-            // before it reaches this point.
+            // The error's shape and status, never its description.
+            // `PolishError.http` carries up to 300 bytes of the provider's
+            // response body, and providers echo the submitted text back in
+            // moderation rejections — so `localizedDescription` here would be
+            // a route from a transcript into the system log.
             Diagnostics.log(
-                "cleanup FAILED after \(Int(elapsed * 1000))ms: \(error.localizedDescription)")
+                "cleanup FAILED after \(Int(elapsed * 1000))ms: \(Diagnostics.describe(error))")
             return text
         }
     }

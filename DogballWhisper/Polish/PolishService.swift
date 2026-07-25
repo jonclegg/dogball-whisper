@@ -6,16 +6,34 @@ enum PolishError: LocalizedError, Equatable {
     case http(Int, String)
     case requiresReasoning(String)
 
+    /// Note what is missing: the response body. It is kept in the payload
+    /// because `disablingReasoningRejected` has to match on it, but it never
+    /// reaches a description that is logged or put on screen. Providers echo
+    /// the submitted text back in moderation rejections, so a body here is a
+    /// route from a transcript to the system log and to the settings window.
+    /// The status code plus a plain-English cause covers every failure a user
+    /// can act on anyway.
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
             return "Add your OpenRouter API key in Settings."
         case .emptyResponse:
             return "The cleanup model returned nothing."
-        case let .http(code, body):
-            return "OpenRouter error \(code): \(body)"
+        case let .http(code, _):
+            return "OpenRouter error \(code). \(Self.hint(forStatus: code))"
         case let .requiresReasoning(model):
             return "\(model) always thinks before answering, which is too slow for dictation. Choose another model in Settings."
+        }
+    }
+
+    private static func hint(forStatus code: Int) -> String {
+        switch code {
+        case 401, 403: return "Check that the API key is right."
+        case 402: return "The OpenRouter account is out of credit."
+        case 404: return "Check the model ID."
+        case 429: return "OpenRouter is rate limiting this key. Try again in a moment."
+        case 500...599: return "OpenRouter is having trouble. Try again in a moment."
+        default: return "Check the model ID and the API key."
         }
     }
 }
@@ -76,7 +94,7 @@ final class PolishService: TextCleaning {
             Diagnostics.log("openrouter: no API key found in the keychain")
             throw PolishError.missingAPIKey
         }
-        Diagnostics.log("openrouter: requesting \(model), key present (\(key.count) chars)")
+        Diagnostics.verbose("openrouter: requesting \(model), key present (\(key.count) chars)")
 
         let messages: [ChatRequest.Message] = [
             .init(role: "system", content: prompt),
