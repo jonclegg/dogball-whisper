@@ -29,25 +29,61 @@ step() { printf "\n\033[1m→ %s\033[0m\n" "$1"; }
 
 [[ -n "$TAG" ]] || fail "Usage: ./scripts/release-macos.sh <tag> [--dry-run]"
 
+# The version string is the only way to tell which build someone is running:
+# there is no auto-update and no crash reporting, so a bug report says
+# "1.0 (1)" for every build ever shipped unless this is derived from the tag.
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || fail "Tag must look like v1.2.3, got '$TAG'"
+MARKETING_VERSION="${TAG#v}"
+# Monotonic across the whole history, and monotonic is all CURRENT_PROJECT_VERSION
+# has to be.
+BUILD_NUMBER="$(git rev-list --count HEAD)"
+
+# Every tag that already exists, locally or on the remote. A version that is
+# not greater than one of these would publish a build that looks older than
+# it is, or collide with one already downloaded.
+EXISTING_TAGS="$(
+  {
+    git tag --list 'v*'
+    git ls-remote --tags origin 2>/dev/null | sed 's|.*refs/tags/||; s|\^{}$||'
+  } | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true
+)"
+if [[ -n "$EXISTING_TAGS" ]]; then
+  LATEST_TAG="$(printf '%s\n' "$EXISTING_TAGS" | sort -V | tail -1)"
+  if printf '%s\n' "$EXISTING_TAGS" | grep -qx "$TAG"; then
+    fail "$TAG already exists"
+  fi
+  HIGHEST="$(printf '%s\n%s\n' "$LATEST_TAG" "$TAG" | sort -V | tail -1)"
+  [[ "$HIGHEST" == "$TAG" ]] \
+    || fail "$TAG is not greater than the latest existing tag ($LATEST_TAG)"
+fi
+
 # Fail early and loudly rather than 10 minutes into a build.
 if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
   fail "notarytool profile '$NOTARY_PROFILE' is missing. Create it once with:
   xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id jonclegg@gmail.com --team-id $TEAM_ID"
 fi
 
-step "Building Release"
+step "Building Release $MARKETING_VERSION ($BUILD_NUMBER)"
 xcodegen generate
+# These two override project.yml's placeholders for every target in this
+# invocation, and land in the generated Info.plist.
 xcodebuild \
   -project DogballWhisper.xcodeproj \
   -scheme DogballWhisper \
   -configuration Release \
   -derivedDataPath build/DerivedData \
   -destination 'platform=macOS' \
+  MARKETING_VERSION="$MARKETING_VERSION" \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   build
 
 [[ -d "$APP_PATH" ]] || fail "Build product not found at $APP_PATH"
 
-step "Verifying the signature and hardened runtime"
+step "Verifying the version, signature, and hardened runtime"
+BUILT_VERSION="$(defaults read "$PWD/$APP_PATH/Contents/Info" CFBundleShortVersionString)"
+[[ "$BUILT_VERSION" == "$MARKETING_VERSION" ]] \
+  || fail "Built app reports version $BUILT_VERSION, expected $MARKETING_VERSION"
 codesign --verify --strict --verbose=2 "$APP_PATH"
 # 'runtime' in the flags is what notarization requires. Capture first rather
 # than piping into `grep -q`: grep exits on the first match, codesign dies of
@@ -89,7 +125,9 @@ step "Stapling"
 xcrun stapler staple "$APP_PATH"
 xcrun stapler validate "$APP_PATH"
 # The real proof: Gatekeeper accepts it as if it had been downloaded.
-spctl -a -vvv -t install "$APP_PATH"
+# `-t exec` is the app-bundle rule set; `-t install` asks about installer
+# packages and answers a question nobody asked here.
+spctl -a -vvv -t exec "$APP_PATH"
 
 step "Packaging"
 ZIP="$DIST_DIR/DogballWhisper-$TAG.zip"

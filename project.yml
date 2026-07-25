@@ -27,8 +27,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonclegg.DogballWhisper
         PRODUCT_NAME: Dogball Whisper
         PRODUCT_MODULE_NAME: DogballWhisper
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        # Placeholders. `scripts/release-macos.sh` overrides both on the
+        # xcodebuild command line from the release tag, so a published build
+        # reports the version someone can actually name in a bug report;
+        # 0.0.0 is what a local `build-mac.sh` build reports, and it says
+        # exactly what it is — a build nobody published.
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0"
         SWIFT_VERSION: "5.10"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
