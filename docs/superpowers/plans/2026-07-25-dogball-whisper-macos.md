@@ -3606,20 +3606,52 @@ git commit -m "feat: model catalog, installer, and whisperkit engine"
 
 ---
 
-### Task 11: Settings window, hotkey picker, and menu
+### Task 11: Settings window, hotkey picker, launch at login, and menu
 
 **Files:**
-- Create: `DogballWhisper/UI/SettingsView.swift`, `DogballWhisper/UI/ShortcutRecorderView.swift`, `DogballWhisper/UI/SettingsWindowController.swift`
+- Create: `DogballWhisper/App/LoginItem.swift`, `DogballWhisper/UI/SettingsView.swift`, `DogballWhisper/UI/ShortcutRecorderView.swift`, `DogballWhisper/UI/SettingsWindowController.swift`
 - Modify: `DogballWhisper/App/MenuBarController.swift`, `DogballWhisper/App/DogballWhisperApp.swift`
 
 **Interfaces:**
 - Consumes: `Preferences`, `ModelManager`, `ModelCatalog`, `KeychainStore`, `PolishService`, `HotkeyBinding`.
 - Produces:
+  - `enum LoginItem` with `static var isEnabled: Bool`, `static func setEnabled(_ enabled: Bool)`.
   - `@MainActor final class SettingsWindowController` with `init(preferences:models:onHotkeyChange:)` and `func show()`.
   - `struct SettingsView: View`, `struct ShortcutRecorderView: View` with `init(binding: Binding<HotkeyBinding>)`.
   - `MenuBarController.init(onOpenSettings: @escaping () -> Void)`, `func update(state: DictationState)`, `func setActiveModelName(_ name: String?)`.
 
-- [ ] **Step 1: Implement the shortcut recorder**
+- [ ] **Step 1: Implement `LoginItem`**
+
+`DogballWhisper/App/LoginItem.swift`:
+
+```swift
+import Foundation
+import ServiceManagement
+
+/// Launch at login via SMAppService. No helper bundle and no deprecated
+/// LSSharedFileList shimming: registering the main app is enough.
+enum LoginItem {
+    static var isEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    static func setEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            NSLog("Launch at login change failed: \(error.localizedDescription)")
+        }
+    }
+}
+```
+
+There is no unit test: `SMAppService` mutates real system state and reports `.requiresApproval` from an unsigned test host. It is covered by the reboot check in the smoke pass.
+
+- [ ] **Step 2: Implement the shortcut recorder**
 
 `DogballWhisper/UI/ShortcutRecorderView.swift`:
 
@@ -3668,7 +3700,7 @@ struct ShortcutRecorderView: View {
 }
 ```
 
-- [ ] **Step 2: Implement the settings view**
+- [ ] **Step 3: Implement the settings view**
 
 `DogballWhisper/UI/SettingsView.swift`:
 
@@ -3888,7 +3920,7 @@ private struct CleanupSettingsTab: View {
 }
 ```
 
-- [ ] **Step 3: Implement the settings window controller**
+- [ ] **Step 4: Implement the settings window controller**
 
 `DogballWhisper/UI/SettingsWindowController.swift`:
 
@@ -3937,7 +3969,7 @@ final class SettingsWindowController {
 }
 ```
 
-- [ ] **Step 4: Rebuild the menu**
+- [ ] **Step 5: Rebuild the menu**
 
 Replace `DogballWhisper/App/MenuBarController.swift`:
 
@@ -4011,7 +4043,7 @@ final class MenuBarController: NSObject {
 }
 ```
 
-- [ ] **Step 5: Assemble the final `AppDelegate`**
+- [ ] **Step 6: Assemble the final `AppDelegate`**
 
 Replace the whole of `DogballWhisper/App/DogballWhisperApp.swift`:
 
@@ -4039,7 +4071,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: DictationCoordinator?
     private var monitor: HotkeyMonitor?
     private var settings: SettingsWindowController?
-    private var onboarding: OnboardingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = DictationPanelController()
@@ -4071,15 +4102,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.onEscape = { MainActor.assumeIsolated { coordinator.abort() } }
         self.monitor = monitor
 
-        if preferences.hasCompletedOnboarding && Permissions.allRequiredGranted {
-            startMonitoring()
-            Task {
-                await models.loadActiveEngine()
-                menuBar.setActiveModelName(
-                    preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
-            }
-        } else {
-            showOnboarding()
+        // Task 12 puts onboarding in front of this.
+        startMonitoring()
+        Task {
+            await models.loadActiveEngine()
+            menuBar.setActiveModelName(
+                preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
         }
     }
 
@@ -4102,31 +4130,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings?.show()
     }
 
-    private func showOnboarding() {
-        if onboarding == nil {
-            onboarding = OnboardingWindowController(
-                preferences: preferences,
-                models: models,
-                onFinished: { [weak self] in
-                    guard let self else { return }
-                    self.preferences.hasCompletedOnboarding = true
-                    self.startMonitoring()
-                    Task { await self.models.loadActiveEngine() }
-                }
-            )
-        }
-        onboarding?.show()
-    }
 }
 ```
 
-`OnboardingWindowController`, `LoginItem`, and `Permissions` land in Tasks 12 and 13; until then this file will not compile, so implement Task 12 before building.
+This task ends with a compiling, runnable app: settings reachable from the menu, hotkey rebindable, models installable. Onboarding wraps the launch path in Task 12.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Build and check the settings UI**
+
+Run: `./scripts/test.sh && ./scripts/build-mac.sh --launch`
+
+Expected: PASS, then the menu has Settings…, Launch at login, and Quit. In Settings: the hotkey picker switches bindings and dictation follows the change with no relaunch; the Models tab installs Whisper Base with live progress and "Use" switches the active model; the Cleanup tab stores a key and the Test button returns cleaned sample text.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add DogballWhisper/UI DogballWhisper/App
-git commit -m "feat: settings window with hotkey, models, and cleanup tabs"
+git commit -m "feat: settings window, launch at login, and menu"
 ```
 
 ---
@@ -4135,6 +4154,7 @@ git commit -m "feat: settings window with hotkey, models, and cleanup tabs"
 
 **Files:**
 - Create: `DogballWhisper/Core/Permissions.swift`, `DogballWhisper/UI/OnboardingView.swift`, `Tests/PermissionsTests.swift`
+- Modify: `DogballWhisper/App/DogballWhisperApp.swift`
 
 **Interfaces:**
 - Consumes: `Preferences`, `ModelManager`, `ModelCatalog`, `AudioRecorder.requestPermission()`.
@@ -4488,7 +4508,45 @@ struct OnboardingView: View {
 }
 ```
 
-- [ ] **Step 6: Build and walk through onboarding**
+- [ ] **Step 6: Put onboarding in front of the launch path**
+
+In `DogballWhisper/App/DogballWhisperApp.swift`, add `private var onboarding: OnboardingWindowController?` alongside the other stored properties, replace the unconditional startup block at the end of `applicationDidFinishLaunching`:
+
+```swift
+        if preferences.hasCompletedOnboarding && Permissions.allRequiredGranted {
+            startMonitoring()
+            Task {
+                await models.loadActiveEngine()
+                menuBar.setActiveModelName(
+                    preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
+            }
+        } else {
+            showOnboarding()
+        }
+    }
+```
+
+and add:
+
+```swift
+    private func showOnboarding() {
+        if onboarding == nil {
+            onboarding = OnboardingWindowController(
+                preferences: preferences,
+                models: models,
+                onFinished: { [weak self] in
+                    guard let self else { return }
+                    self.preferences.hasCompletedOnboarding = true
+                    self.startMonitoring()
+                    Task { await self.models.loadActiveEngine() }
+                }
+            )
+        }
+        onboarding?.show()
+    }
+```
+
+- [ ] **Step 7: Build and walk through onboarding**
 
 Run: `./scripts/build-mac.sh --launch`
 
@@ -4500,7 +4558,7 @@ defaults delete com.jonclegg.DogballWhisper hasCompletedOnboarding 2>/dev/null |
 
 Expected: the setup window opens, each permission row flips to a green check as it is granted (Input Monitoring flips within a second of granting it in System Settings, thanks to the poll), the Parakeet download shows real progress, and "Start dictating" enables only when both required permissions are granted and a model is active. Note that granting Input Monitoring makes macOS ask to quit and reopen the app; that is normal, and the event tap only works after the relaunch.
 
-- [ ] **Step 7: Run the full suite and commit**
+- [ ] **Step 8: Run the full suite and commit**
 
 ```bash
 ./scripts/test.sh
@@ -4510,47 +4568,16 @@ git commit -m "feat: permission handling and first-run onboarding"
 
 ---
 
-### Task 13: Launch at login, docs, and the manual smoke pass
+### Task 13: Docs and the manual smoke pass
 
 **Files:**
-- Create: `DogballWhisper/App/LoginItem.swift`, `docs/MANUAL-SMOKE.md`, `README.md`
+- Create: `docs/MANUAL-SMOKE.md`, `README.md`
 
 **Interfaces:**
-- Consumes: nothing.
-- Produces: `enum LoginItem` with `static var isEnabled: Bool`, `static func setEnabled(_ enabled: Bool)`.
+- Consumes: everything built so far. Produces no code.
 
-- [ ] **Step 1: Implement `LoginItem`**
 
-`DogballWhisper/App/LoginItem.swift`:
-
-```swift
-import Foundation
-import ServiceManagement
-
-/// Launch at login via SMAppService. No helper bundle and no deprecated
-/// LSSharedFileList shimming: registering the main app is enough.
-enum LoginItem {
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
-    static func setEnabled(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            NSLog("Launch at login change failed: \(error.localizedDescription)")
-        }
-    }
-}
-```
-
-There is no unit test: `SMAppService` mutates real system state and reports `.requiresApproval` from an unsigned test host. It is covered by the reboot check in the smoke pass.
-
-- [ ] **Step 2: Write the manual smoke checklist**
+- [ ] **Step 1: Write the manual smoke checklist**
 
 `docs/MANUAL-SMOKE.md`:
 
@@ -4609,7 +4636,7 @@ Build and install: `./scripts/build-mac.sh --launch`
 - [ ] No Dock icon and no window at launch once onboarding is done
 ```
 
-- [ ] **Step 3: Write the README**
+- [ ] **Step 2: Write the README**
 
 `README.md`:
 
@@ -4653,27 +4680,27 @@ Docs: `docs/superpowers/specs/` for the design, `docs/MANUAL-SMOKE.md` for the
 pre-ship checklist.
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [ ] **Step 3: Run the full suite**
 
 Run: `./scripts/test.sh`
 Expected: PASS, every test.
 
-- [ ] **Step 5: Work the smoke checklist**
+- [ ] **Step 4: Work the smoke checklist**
 
 Run: `./scripts/build-mac.sh --launch`, then walk `docs/MANUAL-SMOKE.md` top to bottom. Fix anything that fails before moving on; note in the commit message anything deliberately left failing.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add DogballWhisper/App/LoginItem.swift docs/MANUAL-SMOKE.md README.md
-git commit -m "feat: launch at login, readme, and manual smoke checklist"
+git add docs/MANUAL-SMOKE.md README.md
+git commit -m "docs: readme and manual smoke checklist"
 ```
 
 ---
 
 ## Notes for the implementer
 
-- **Order matters between Tasks 11 and 12.** Task 11's `AppDelegate` references `OnboardingWindowController`, `Permissions`, and `LoginItem`, which arrive in Tasks 12 and 13. If you need a compiling build after Task 11, stub `LoginItem.isEnabled`/`setEnabled` first (it is six lines) and keep the old onboarding-free launch path until Task 12 lands.
+- **Every task ends with a compiling, testable app.** Tasks are ordered so nothing references a type that does not exist yet. If a task leaves you with a build error, re-read its step list before inventing a stub.
 - **Regenerate after touching `project.yml`.** Both scripts run `xcodegen generate` first, so a new source file is picked up automatically. Adding a directory outside `DogballWhisper/` or `Tests/` needs a `project.yml` change.
 - **Granting Input Monitoring restarts the app.** macOS prompts to quit and reopen; the tap does not work until it does. This is expected, not a bug.
 - **Never change the bundle ID or the signing identity.** Every permission grant is keyed to them.
