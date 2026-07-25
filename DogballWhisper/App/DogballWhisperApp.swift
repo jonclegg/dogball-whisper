@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 
 @main
 enum DogballWhisperMain {
@@ -41,9 +42,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.coordinator = coordinator
 
         let menuBar = MenuBarController(onOpenSettings: { [weak self] in self?.showSettings() })
-        menuBar.setActiveModelName(
-            preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
         self.menuBar = menuBar
+        refreshActiveModelLabel()
+        // ModelManager is @Observable but its `activeModelID` is a computed
+        // pass-through over `preferences` (not itself tracked), so this
+        // observes `activeEngine` instead — a stored property that always
+        // changes in lockstep with `preferences.activeModelID` (see the
+        // invariant documented on ModelManager.makeActive). That keeps the
+        // menu's model name current after Settings > Models install/use/
+        // delete, not just at launch.
+        observeActiveModel()
         coordinator.onStateChange = { [weak menuBar] state in menuBar?.update(state: state) }
 
         let monitor = HotkeyMonitor(binding: preferences.hotkeyBinding) { signal in
@@ -56,8 +64,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startMonitoring()
         Task {
             await models.loadActiveEngine()
-            menuBar.setActiveModelName(
-                preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
+            refreshActiveModelLabel()
+        }
+    }
+
+    private func refreshActiveModelLabel() {
+        menuBar?.setActiveModelName(
+            preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
+    }
+
+    private func observeActiveModel() {
+        withObservationTracking {
+            _ = models.activeEngine
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshActiveModelLabel()
+                // withObservationTracking's onChange fires once and then
+                // stops; re-register to keep observing every subsequent
+                // change for the lifetime of the app.
+                self.observeActiveModel()
+            }
         }
     }
 
@@ -74,7 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings = SettingsWindowController(
                 preferences: preferences,
                 models: models,
-                onHotkeyChange: { [weak self] binding in self?.monitor?.binding = binding }
+                onHotkeyChange: { [weak self] binding in self?.monitor?.binding = binding },
+                onLaunchAtLoginChange: { [weak self] in self?.menuBar?.refreshLaunchAtLoginState() }
             )
         }
         settings?.show()

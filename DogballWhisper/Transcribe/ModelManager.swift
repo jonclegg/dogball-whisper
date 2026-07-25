@@ -180,7 +180,13 @@ final class ModelManager {
         activeEngine = engine
     }
 
-    private static func defaultEngineFactory(
+    // Touches no MainActor-isolated state (no `self`, no `progress`/`activeEngine`),
+    // so it is explicitly nonisolated. Without this, referencing it as an
+    // `init` default value implicitly inherits @MainActor from the enclosing
+    // class and the compiler cannot preserve that isolation across the
+    // conversion to the plain (non-actor) `EngineFactory` type, which is a
+    // warning today and an error under the Swift 6 language mode.
+    private nonisolated static func defaultEngineFactory(
         for descriptor: ModelDescriptor, onProgress: @escaping @Sendable (Double) -> Void
     ) -> TranscriptionEngine {
         switch descriptor.source {

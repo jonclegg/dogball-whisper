@@ -9,21 +9,25 @@ final class SettingsWindowController {
     private let preferences: Preferences
     private let models: ModelManager
     private let onHotkeyChange: (HotkeyBinding) -> Void
+    private let onLaunchAtLoginChange: () -> Void
 
     init(
         preferences: Preferences,
         models: ModelManager,
-        onHotkeyChange: @escaping (HotkeyBinding) -> Void
+        onHotkeyChange: @escaping (HotkeyBinding) -> Void,
+        onLaunchAtLoginChange: @escaping () -> Void
     ) {
         self.preferences = preferences
         self.models = models
         self.onHotkeyChange = onHotkeyChange
+        self.onLaunchAtLoginChange = onLaunchAtLoginChange
     }
 
     func show() {
         if window == nil {
             let view = SettingsView(
-                preferences: preferences, models: models, onHotkeyChange: onHotkeyChange)
+                preferences: preferences, models: models, onHotkeyChange: onHotkeyChange,
+                onLaunchAtLoginChange: onLaunchAtLoginChange)
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 520, height: 420),
                 styleMask: [.titled, .closable, .fullSizeContentView],

@@ -57,6 +57,14 @@ final class MenuBarController: NSObject {
         activeModelItem.title = name ?? "No model installed"
     }
 
+    /// Re-reads `LoginItem.isEnabled` rather than trusting a value passed
+    /// in, so the checkmark always reflects actual system state — including
+    /// a change made from the settings window, or from System Settings
+    /// directly — not whatever this controller last cached.
+    func refreshLaunchAtLoginState() {
+        launchAtLoginItem.state = LoginItem.isEnabled ? .on : .off
+    }
+
     @objc private func openSettings() {
         onOpenSettings()
     }
