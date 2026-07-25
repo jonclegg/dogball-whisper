@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 
 struct RecordedAudio: Equatable {
     let url: URL
@@ -36,11 +37,12 @@ protocol AudioRecording: AnyObject {
 /// consumes whatever it produced, or falls back to preparing inline exactly
 /// as before if nothing was ready in time.
 ///
-/// All of this class's methods, `prewarm()` included, are main-thread-only,
-/// matching the meter timer's existing assumption (it runs on `RunLoop.main`).
-/// `prewarm()` stays cheap on that thread by doing only the state check
-/// there; the actual hardware work happens on `prewarmQueue` and the result
-/// is handed back via `DispatchQueue.main.async`.
+/// Every method here must be *called* on the main thread, matching the meter
+/// timer's existing assumption (it runs on `RunLoop.main`), and all of this
+/// class's mutable state is touched only there. `prewarm()` is the one that
+/// does not stay there: it does its state check on the main thread, hands the
+/// hardware work to `prewarmQueue`, and comes back via
+/// `DispatchQueue.main.async` before touching anything.
 final class AudioRecorder: AudioRecording {
     /// Sized so the bars fill the panel's width without being squeezed into
     /// hairlines: 28 bars at 1.5pt with 1pt gaps is 69pt inside a 104pt pill.
@@ -72,18 +74,61 @@ final class AudioRecorder: AudioRecording {
 
     private let prewarmQueue = DispatchQueue(
         label: "com.jonclegg.DogballWhisper.AudioRecorder.prewarm", qos: .utility)
-    private var deviceChangeObservers: [NSObjectProtocol] = []
+    private var notificationObservers: [NSObjectProtocol] = []
 
     init(onLevels: @escaping ([Float]) -> Void = { _ in }) {
         self.onLevels = onLevels
         observeDeviceChanges()
+        Self.purgeStaleRecordings()
+        observeTermination()
     }
 
     deinit {
         timer?.invalidate()
-        deviceChangeObservers.forEach(NotificationCenter.default.removeObserver)
+        notificationObservers.forEach(NotificationCenter.default.removeObserver)
         if let prewarmedURL {
             try? FileManager.default.removeItem(at: prewarmedURL)
+        }
+    }
+
+    /// A menu-bar app's recorder is never deallocated, so `deinit` does not
+    /// run at quit and the armed zero-length WAV was left behind — one per
+    /// launch, accumulating in the cache directory forever.
+    private func observeTermination() {
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                self?.discardPrewarmed()
+            })
+    }
+
+    /// And this is the other half: a crash or a force quit never gets to run
+    /// the notification above, so anything left from an earlier run is swept
+    /// at launch.
+    ///
+    /// The directory is shared by every copy of this app, and an armed
+    /// recorder holds an open file that looks exactly like an abandoned one
+    /// from outside the process — deleting it would break the *next*
+    /// dictation of a copy that is running right now. So this does nothing at
+    /// all while another instance is alive (the unit-test host is one, and it
+    /// runs on the same machine the app is dictating on), and even then only
+    /// touches files old enough that no live recording could still own them.
+    private static func purgeStaleRecordings() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.jonclegg.DogballWhisper"
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).count <= 1
+        else { return }
+
+        let cutoff = Date().addingTimeInterval(-3600)
+        let manager = FileManager.default
+        guard let files = try? manager.contentsOfDirectory(
+            at: recordingsDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return }
+        for file in files {
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            if let modified, modified > cutoff { continue }
+            try? manager.removeItem(at: file)
         }
     }
 
@@ -261,7 +306,7 @@ final class AudioRecorder: AudioRecording {
             }
             self?.rearmForDeviceChange()
         }
-        deviceChangeObservers = [
+        notificationObservers = [
             center.addObserver(
                 forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main,
                 using: handleDeviceChange),

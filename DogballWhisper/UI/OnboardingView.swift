@@ -104,10 +104,15 @@ struct OnboardingView: View {
     let onFinished: () -> Void
 
     @State private var apiKey = ""
+    /// Mirrors the hotkey the picker below currently holds, so the headline
+    /// keeps naming the key the user actually has to hold. This window
+    /// contains a hotkey picker, so a hardcoded "right ⌥" would be wrong the
+    /// moment anyone used it.
+    @State private var hotkeyName = HotkeyBinding.rightOption.displayName
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Hold right ⌥, talk, let go. The text lands wherever you were typing.")
+            Text("Hold \(hotkeyName), talk, let go. The text lands wherever you were typing.")
                 .font(.title3)
 
             VStack(spacing: 10) {
@@ -165,7 +170,10 @@ struct OnboardingView: View {
                 Text("Hold this key to dictate, let go to paste. Change it now if your keyboard has no right ⌥. You can always come back to this in Settings later.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HotkeyPickerView(preferences: preferences, onHotkeyChange: onHotkeyChange)
+                HotkeyPickerView(preferences: preferences) { binding in
+                    hotkeyName = binding.displayName
+                    onHotkeyChange(binding)
+                }
             }
 
             Divider()
@@ -198,6 +206,7 @@ struct OnboardingView: View {
         .padding(20)
         .onAppear {
             poller.refresh()
+            hotkeyName = preferences.hotkeyBinding.displayName
             // Show the key that is already stored, so running setup a second
             // time does not present an empty field that looks like there is
             // no key.
