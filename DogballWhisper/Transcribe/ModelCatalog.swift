@@ -114,11 +114,16 @@ enum ModelCatalog {
         }
     }
 
+    /// `isInstalled` is injectable (defaulting to the real on-disk check) so
+    /// callers — notably tests — can drive every branch deterministically
+    /// instead of depending on what happens to be downloaded on the machine
+    /// running the suite.
     static func state(
-        for descriptor: ModelDescriptor, activeID: String?, progress: [String: Double]
+        for descriptor: ModelDescriptor, activeID: String?, progress: [String: Double],
+        isInstalled isInstalledCheck: (ModelDescriptor) -> Bool = isInstalled
     ) -> ModelInstallState {
         if let fraction = progress[descriptor.id] { return .downloading(fraction) }
-        guard isInstalled(descriptor) else { return .notInstalled }
+        guard isInstalledCheck(descriptor) else { return .notInstalled }
         return descriptor.id == activeID ? .active : .installed
     }
 }

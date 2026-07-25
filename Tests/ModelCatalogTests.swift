@@ -45,11 +45,20 @@ final class ModelCatalogTests: XCTestCase {
             ModelCatalog.state(for: descriptor, activeID: nil, progress: [descriptor.id: 0.4]),
             .downloading(0.4))
 
-        // Not installed on disk, so neither "active" nor "installed" can apply.
-        if !ModelCatalog.isInstalled(descriptor) {
-            XCTAssertEqual(
-                ModelCatalog.state(for: descriptor, activeID: descriptor.id, progress: [:]),
-                .notInstalled)
-        }
+        // Driven with an injected install check so this holds regardless of
+        // whether the model actually happens to be on disk on the machine
+        // running the suite.
+        XCTAssertEqual(
+            ModelCatalog.state(
+                for: descriptor, activeID: descriptor.id, progress: [:], isInstalled: { _ in false }),
+            .notInstalled)
+        XCTAssertEqual(
+            ModelCatalog.state(
+                for: descriptor, activeID: descriptor.id, progress: [:], isInstalled: { _ in true }),
+            .active)
+        XCTAssertEqual(
+            ModelCatalog.state(
+                for: descriptor, activeID: "some-other-model", progress: [:], isInstalled: { _ in true }),
+            .installed)
     }
 }
