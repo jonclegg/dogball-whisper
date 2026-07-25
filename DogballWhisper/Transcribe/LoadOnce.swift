@@ -1,44 +1,40 @@
 import Foundation
 
-/// Runs an async throwing operation at most once at a time, letting
-/// concurrent callers await the same in-flight (or already-completed) run
-/// instead of starting another.
+/// Runs an async throwing operation at most once *at a time*, letting
+/// concurrent callers await the same in-flight run instead of starting
+/// another.
 ///
 /// Engines with real setup cost (model download + load) use this so `load()`
 /// is safe to call from more than one place at once — e.g. the dictation
 /// coordinator and the settings model manager both call it — without racing
 /// two downloads onto the same partial file on disk.
 ///
-/// A successful run is cached forever, so later calls are free. A failed run
-/// is *not* cached: the next call retries from scratch, because the likely
-/// failure here is a network drop mid-download, not a permanent condition.
+/// `LoadOnce` only coalesces concurrent calls; it does not remember whether a
+/// past run succeeded. Callers that want "free after the first success"
+/// behavior track that themselves (e.g. `ParakeetEngine`'s `isLoaded` flag),
+/// because only the caller knows when that memory should be invalidated —
+/// here, when `unload()` frees the model. If `LoadOnce` cached success
+/// itself, `unload()` would have no way to clear it, and a later `load()`
+/// would hand back a stale, already-freed result instead of actually
+/// reloading.
 actor LoadOnce<Success: Sendable> {
     private var inFlight: Task<Success, Error>?
-    private var cachedResult: Success?
 
     init() {}
 
-    /// Runs `operation` unless a previous call already succeeded, in which
-    /// case the cached result is returned immediately. Calls that arrive
-    /// while `operation` is still running await that same run.
+    /// Runs `operation`, or, if a previous call is still running it, awaits
+    /// that same in-flight run instead of starting a second one. Once the
+    /// run finishes (success or failure) it is forgotten, so the next call
+    /// — whether concurrent-but-later or well after the fact — runs
+    /// `operation` again.
     func run(_ operation: @escaping @Sendable () async throws -> Success) async throws -> Success {
-        if let cachedResult {
-            return cachedResult
-        }
         if let inFlight {
             return try await inFlight.value
         }
 
         let task = Task { try await operation() }
         inFlight = task
-        do {
-            let result = try await task.value
-            cachedResult = result
-            inFlight = nil
-            return result
-        } catch {
-            inFlight = nil
-            throw error
-        }
+        defer { inFlight = nil }
+        return try await task.value
     }
 }

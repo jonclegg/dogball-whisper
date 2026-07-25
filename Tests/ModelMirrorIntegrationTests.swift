@@ -1,6 +1,28 @@
 import XCTest
 @testable import DogballWhisper
 
+/// Thread-safe collector for the progress fractions `ModelMirror.download`
+/// reports through its `@Sendable` progress closure. A plain captured `var`
+/// would make that closure mutate non-isolated state from a `@Sendable`
+/// context, which is an error under the Swift 6 language mode; this holder
+/// gives it somewhere safe to write.
+private final class ProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Double] = []
+
+    func append(_ value: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.append(value)
+    }
+
+    var snapshot: [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 final class ModelMirrorIntegrationTests: XCTestCase {
 
     // The manifest is what makes byte-accurate progress and the size check
@@ -27,17 +49,18 @@ final class ModelMirrorIntegrationTests: XCTestCase {
             ProcessInfo.processInfo.environment["RUN_MIRROR_IT"] == "1",
             "Set RUN_MIRROR_IT=1 to run the live mirror download test")
 
-        var fractions: [Double] = []
+        let fractions = ProgressLog()
         try await ModelMirror.download { fractions.append($0) }
 
         XCTAssertTrue(ModelMirror.isComplete())
-        XCTAssertEqual(fractions.last, 1.0)
-        XCTAssertEqual(fractions, fractions.sorted(), "progress must not go backwards")
+        let fractionValues = fractions.snapshot
+        XCTAssertEqual(fractionValues.last, 1.0)
+        XCTAssertEqual(fractionValues, fractionValues.sorted(), "progress must not go backwards")
 
         // Second pass: everything is on disk, so it should finish immediately
         // and still report completion.
-        var resumed: [Double] = []
+        let resumed = ProgressLog()
         try await ModelMirror.download { resumed.append($0) }
-        XCTAssertEqual(resumed.last, 1.0)
+        XCTAssertEqual(resumed.snapshot.last, 1.0)
     }
 }

@@ -65,7 +65,7 @@ struct HotkeyMatcher {
         guard let targetMask = ModifierKeyCode.mask(for: binding.keyCode) else { return nil }
 
         switch input {
-        case let .keyDown(_, _):
+        case .keyDown:
             // Any real key while held means the user is typing a shortcut.
             guard isEngaged else { return nil }
             isEngaged = false

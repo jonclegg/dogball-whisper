@@ -44,7 +44,14 @@ final class LoadOnceTests: XCTestCase {
         XCTAssertEqual(finalCount, 1, "operation should have run exactly once")
     }
 
-    func testSuccessIsCachedSoALaterCallDoesNotRerun() async throws {
+    // LoadOnce only coalesces calls that overlap in time; it does not
+    // remember a past success. Callers that want "free after the first
+    // success" (like ParakeetEngine's `isLoaded` flag) track that
+    // themselves, because only the caller knows when that memory must be
+    // invalidated (e.g. ParakeetEngine.unload()). If LoadOnce cached success
+    // itself, unload() would have no way to clear it and a later load()
+    // would hand back a stale result instead of actually reloading.
+    func testASubsequentCallAfterCompletionRunsTheOperationAgain() async throws {
         let counter = Counter()
         let loadOnce = LoadOnce<Int>()
 
@@ -52,9 +59,9 @@ final class LoadOnceTests: XCTestCase {
         let second = try await loadOnce.run { await counter.increment() }
 
         XCTAssertEqual(first, 1)
-        XCTAssertEqual(second, 1, "second call should reuse the cached result")
+        XCTAssertEqual(second, 2, "a call after the first has completed should run again, not reuse a cached result")
         let finalCount = await counter.count
-        XCTAssertEqual(finalCount, 1)
+        XCTAssertEqual(finalCount, 2)
     }
 
     func testFailureIsNotCachedSoALaterCallRetries() async throws {
