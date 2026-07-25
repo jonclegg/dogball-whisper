@@ -119,6 +119,17 @@ final class HotkeyMatcherTests: XCTestCase {
         XCTAssertFalse(matcher.isEngaged)
     }
 
+    // Reassigning the same binding must be a no-op, even mid-hold: a future
+    // caller (e.g. settings writing back an unchanged value) must not
+    // spuriously cancel an active recording.
+    func testRebindToTheSameBindingWhileEngagedDoesNotCancel() {
+        var matcher = HotkeyMatcher(binding: .rightOption)
+        XCTAssertEqual(matcher.handle(.flagsChanged(keyCode: 61, flags: [.maskAlternate])), .began)
+
+        XCTAssertNil(matcher.rebind(to: .rightOption))
+        XCTAssertTrue(matcher.isEngaged)
+    }
+
     // Same rule as modifier-only bindings: any other key pressed while a
     // combo is held abandons the dictation rather than leaving it stuck.
     func testUnrelatedKeyWhileComboEngagedCancels() {
@@ -147,5 +158,13 @@ final class HotkeyMatcherTests: XCTestCase {
         var matcher = HotkeyMatcher(binding: HotkeyBinding(comboKeyCode: 49, modifiers: []))
         XCTAssertNil(matcher.handle(.keyDown(keyCode: 49, flags: [])))
         XCTAssertFalse(matcher.isEngaged)
+    }
+
+    // The tap must never swallow a keystroke the matcher won't act on: since
+    // an empty-modifier combo can never engage, its keystroke must not be
+    // consumed either, or the app would silently eat input for nothing.
+    func testConsumesEventIsFalseForComboWithEmptyModifiers() {
+        let matcher = HotkeyMatcher(binding: HotkeyBinding(comboKeyCode: 49, modifiers: []))
+        XCTAssertFalse(matcher.consumesEvent(.keyDown(keyCode: 49, flags: [])))
     }
 }

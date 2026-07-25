@@ -37,6 +37,7 @@ struct HotkeyMatcher {
     /// binding changes underneath it, so this reports it as cancelled before
     /// applying the new binding.
     mutating func rebind(to newBinding: HotkeyBinding) -> HotkeySignal? {
+        guard newBinding != binding else { return nil }
         let signal: HotkeySignal? = isEngaged ? .cancelled : nil
         isEngaged = false
         binding = newBinding
@@ -48,6 +49,10 @@ struct HotkeyMatcher {
     /// through, since swallowing them would break the modifier itself.
     func consumesEvent(_ input: HotkeyInput) -> Bool {
         guard !binding.isModifierOnly else { return false }
+        // A combo with no modifiers can never engage (see handleCombo), so
+        // the tap must not swallow its keystroke either; otherwise it would
+        // silently eat input while no dictation starts.
+        guard !binding.modifiers.isEmpty else { return false }
         guard case let .keyDown(keyCode, flags) = input else { return false }
         return keyCode == binding.keyCode && Self.filtered(flags) == binding.modifiers
     }
