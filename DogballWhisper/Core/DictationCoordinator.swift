@@ -383,6 +383,12 @@ final class DictationCoordinator {
             Diagnostics.log(
                 "cleanup TIMED OUT after \(config.cleanupTimeout)s, inserting the raw transcript")
             return text
+        } catch let error as PolishError where error == .missingAPIKey {
+            // Not a failure: cleanup is optional, and having no key is an
+            // ordinary way to run this app. Logging it at notice level would
+            // persist a timestamped line for every dictation the user makes.
+            Diagnostics.verbose("cleanup skipped: no API key")
+            return text
         } catch {
             let elapsed = Date().timeIntervalSince(started)
             // The error's shape and status, never its description.

@@ -281,13 +281,29 @@ private struct CleanupSettingsTab: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
             commitAPIKey()
         }
+        // AppKit does not post willCloseNotification on terminate, so quitting
+        // with the settings window still open would drop whatever is sitting
+        // in the debounce. That fails in the worse direction for a *cleared*
+        // field: the user believes they revoked the key and did not.
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+        ) { _ in
+            commitAPIKey()
+        }
     }
 
     private func commitAPIKey() {
         apiKeyCommit?.cancel()
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != storedAPIKey else { return }
-        KeychainStore.setKey(fromField: trimmed)
+        // Only treat the field as committed if the keychain actually took it.
+        // Recording it optimistically would make every later flush a no-op via
+        // the guard above, so a failed revocation would leave the user
+        // believing the key is gone while it is still stored and still used.
+        guard KeychainStore.setKey(fromField: trimmed) else {
+            Diagnostics.log("keychain: failed to store the API key change")
+            return
+        }
         storedAPIKey = trimmed
     }
 

@@ -91,7 +91,11 @@ final class PolishService: TextCleaning {
         guard let key = keyProvider(), !key.isEmpty else {
             // Never log the key. Its presence and length are enough to tell a
             // missing key apart from a malformed one.
-            Diagnostics.log("openrouter: no API key found in the keychain")
+            // Verbose, not a failure worth persisting: cleanup is optional and
+            // no key is a perfectly ordinary configuration, so logging it at
+            // notice level would write a durable timestamped record of every
+            // dictation for anyone who simply never wanted cleanup.
+            Diagnostics.verbose("openrouter: no API key found in the keychain")
             throw PolishError.missingAPIKey
         }
         Diagnostics.verbose("openrouter: requesting \(model), key present (\(key.count) chars)")

@@ -48,6 +48,17 @@ EXISTING_TAGS="$(
     git ls-remote --tags origin 2>/dev/null | sed 's|.*refs/tags/||; s|\^{}$||'
   } | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true
 )"
+# An empty list means either a genuinely first release or an unreachable
+# remote. Those must not be treated alike: degrading to "no guard" when the
+# network is down is how a stale tag gets published. Confirm the remote
+# answered before accepting that there is nothing to compare against.
+if [[ -z "$EXISTING_TAGS" ]] && ! git ls-remote --exit-code --tags origin >/dev/null 2>&1; then
+  if git ls-remote origin >/dev/null 2>&1; then
+    : # remote reachable and genuinely has no tags yet
+  else
+    fail "cannot reach origin to check existing tags. Re-run when it is reachable, or pass --dry-run"
+  fi
+fi
 if [[ -n "$EXISTING_TAGS" ]]; then
   LATEST_TAG="$(printf '%s\n' "$EXISTING_TAGS" | sort -V | tail -1)"
   if printf '%s\n' "$EXISTING_TAGS" | grep -qx "$TAG"; then
