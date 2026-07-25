@@ -195,6 +195,38 @@ private struct CleanupSettingsTab: View {
     @State private var prompt = ""
     @State private var testResult: String?
     @State private var isTesting = false
+    @State private var isCustomModel = false
+
+    /// Fast, inexpensive models suited to a short rewrite. Not exhaustive on
+    /// purpose — OpenRouter carries hundreds, and the custom field is there
+    /// for anything not listed.
+    private static let suggestedModels = [
+        "anthropic/claude-haiku-4.5",
+        "google/gemini-3.5-flash",
+        "z-ai/glm-5-turbo",
+        "openai/gpt-4.1",
+    ]
+
+    /// Sentinel for the "Custom…" row. Contains a space, so it can never
+    /// collide with a real OpenRouter model ID.
+    private static let customModelTag = "custom model"
+
+    /// Picking a listed model stores it directly; picking "Custom…" reveals
+    /// the text field and leaves whatever is already stored in place, so
+    /// choosing it does not blank out a working model ID.
+    private var modelSelection: Binding<String> {
+        Binding(
+            get: { isCustomModel ? Self.customModelTag : modelID },
+            set: { selected in
+                if selected == Self.customModelTag {
+                    isCustomModel = true
+                } else {
+                    isCustomModel = false
+                    modelID = selected
+                }
+            }
+        )
+    }
 
     var body: some View {
         Form {
@@ -206,8 +238,18 @@ private struct CleanupSettingsTab: View {
             }
             Section("OpenRouter") {
                 SecureField("API key", text: $apiKey)
-                TextField("Model", text: $modelID)
-                Text("Suggestions: anthropic/claude-haiku-4.5, google/gemini-3.5-flash, z-ai/glm-5-turbo")
+                Picker("Model", selection: modelSelection) {
+                    ForEach(Self.suggestedModels, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                    Divider()
+                    Text("Custom…").tag(Self.customModelTag)
+                }
+                if isCustomModel {
+                    TextField("Model ID", text: $modelID)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("Cleanup runs between letting go of the key and the text appearing, so a faster model means less waiting. Anything slower than \(Int(DictationCoordinator.Config().cleanupTimeout)) seconds is abandoned and the raw transcript is used.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -230,6 +272,10 @@ private struct CleanupSettingsTab: View {
         .onAppear {
             enabled = preferences.cleanupEnabled
             modelID = preferences.cleanupModelID
+            // A stored model that is not on the list is by definition one the
+            // user typed, so open on the custom field rather than silently
+            // showing a different model as selected.
+            isCustomModel = !Self.suggestedModels.contains(modelID)
             prompt = preferences.cleanupPrompt
             apiKey = KeychainStore.read() ?? ""
         }
