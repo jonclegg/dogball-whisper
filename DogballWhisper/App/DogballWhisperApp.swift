@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recorder: recorder,
             engineProvider: { [weak self] in self?.engine },
             inserter: PasteboardTextInserter(),
-            cleaner: nil,
+            cleaner: PolishService(),
             presenter: panel,
             preferences: preferences
         )
