@@ -27,7 +27,10 @@ final class DictationPanelController: DictationPresenting {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // .fullScreenAuxiliary is what lets this surface as an overlay on a
+        // Space another app has taken into native full screen; without it,
+        // dictating into a full-screen editor or browser shows no panel.
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: PanelRoot(model: model))
     }
 
@@ -61,7 +64,10 @@ final class DictationPanelController: DictationPresenting {
     }
 
     /// Levels arrive at ~30Hz during recording, separately from state changes.
+    /// Skipped while the panel is hidden so a trailing sample after
+    /// `dismiss(after:)` fires does not re-evaluate a hidden SwiftUI body.
     func updateLevels(_ levels: [Float]) {
+        guard panel.isVisible else { return }
         model.levels = levels
     }
 
