@@ -213,7 +213,15 @@ private struct CleanupSettingsTab: View {
                 TextEditor(text: $prompt)
                     .font(.system(size: 12, design: .monospaced))
                     .frame(minHeight: 110)
-                Button("Reset to default") { prompt = Preferences.defaultCleanupPrompt }
+                HStack {
+                    Button("Reset to default") { prompt = Preferences.defaultCleanupPrompt }
+                    Button("Use the developer prompt") {
+                        prompt = Preferences.developerCleanupPrompt
+                    }
+                }
+                Text("The developer prompt also fixes technical terms the speech model mishears, so \"Maine\" becomes \"main\" and \"guess\" becomes \"git\". Pick it only if you dictate about code, because it rewrites those words wherever they appear.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section {
                 HStack {

@@ -28,7 +28,26 @@ final class Preferences {
     /// Kept deliberately short. Every character here is input the cleanup model
     /// reads before it can answer, and this call sits between the user letting
     /// go of the key and the text appearing, so prompt length is felt directly.
+    ///
+    /// Deliberately says nothing about who the speaker is or what they are
+    /// talking about. Anything domain-specific here rewrites words the
+    /// speaker actually said — a prompt that turns "Maine" into "main" is
+    /// right for someone dictating code and wrong for someone dictating about
+    /// the state of Maine, and they get no say in it and no sign it happened.
+    /// The domain-specific version is `developerCleanupPrompt`, offered in
+    /// Settings > Cleanup as an explicit choice.
     static let defaultCleanupPrompt = """
+        Remove filler words, false starts, stutters, and repeated words. Fix \
+        punctuation and capitalization. Do not rephrase, reorder, translate, or \
+        add anything, and keep the speaker's own wording. Return only the \
+        cleaned text.
+        """
+
+    /// The default plus the one instruction that cannot be a default: fixing
+    /// technical terms the speech model mishears. Selectable in
+    /// Settings > Cleanup, and documented in the README so it can be pasted
+    /// in or edited into something for another field entirely.
+    static let developerCleanupPrompt = """
         Remove filler words, false starts, stutters, and repeated words. Fix \
         punctuation and capitalization. The speaker is a developer: fix misheard \
         technical terms ("Maine" is "main", "guess" is "git"). Do not rephrase or \
