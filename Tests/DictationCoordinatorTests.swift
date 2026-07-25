@@ -123,17 +123,26 @@ final class DictationCoordinatorTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Every coordinator built here gets an explicit caret provider: the
+    /// default one reaches into the real accessibility API and would set
+    /// attributes on whatever app happens to be frontmost while the suite
+    /// runs.
     private func makeCoordinator(
+        engineProvider: EngineProvider? = nil,
         cleaner: TextCleaning? = nil,
+        caretProvider: CaretProvider? = nil,
+        secureInput: Bool = false,
         config: DictationCoordinator.Config = .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
     ) -> DictationCoordinator {
         DictationCoordinator(
             recorder: recorder,
-            engineProvider: { [engine] in engine },
+            engineProvider: engineProvider ?? { [engine] in engine },
             inserter: inserter,
             cleaner: cleaner,
             presenter: presenter,
             preferences: prefs,
+            caretProvider: caretProvider ?? { .unknown },
+            secureInputProvider: { secureInput },
             config: config
         )
     }
@@ -235,15 +244,7 @@ final class DictationCoordinatorTests: XCTestCase {
     }
 
     func testMissingEngineFailsWithAnActionableMessage() async {
-        let coordinator = DictationCoordinator(
-            recorder: recorder,
-            engineProvider: { nil },
-            inserter: inserter,
-            cleaner: nil,
-            presenter: presenter,
-            preferences: prefs,
-            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
-        )
+        let coordinator = makeCoordinator(engineProvider: { nil })
         coordinator.handle(.began)
         await coordinator.waitForWork()
 
@@ -252,6 +253,90 @@ final class DictationCoordinatorTests: XCTestCase {
             coordinator.state,
             .failed(TranscriptionError.noModelInstalled.localizedDescription))
         XCTAssertEqual(presenter.dismissCount, 1)
+    }
+
+    // MARK: - Password refusal
+    //
+    // The one failure mode that would leak a secret: dictated text is sent to
+    // OpenRouter for cleanup, so a dictation that starts at a password prompt
+    // ships the password to a third party. These test the promise itself —
+    // nothing recorded, nothing cleaned, nothing inserted — not the mechanism.
+
+    // Secure event input covers what the accessibility tree cannot see: a
+    // sudo, ssh, or gpg prompt in a terminal is an ordinary AXTextArea, and
+    // this is the only signal that it is a password prompt at all. It is
+    // checked before the recorder is ever touched.
+    func testSecureEventInputRefusesBeforeTheRecorderEverStarts() async {
+        let coordinator = makeCoordinator(cleaner: cleaner, secureInput: true)
+        coordinator.handle(.began)
+        coordinator.handle(.ended)
+        await coordinator.waitForWork()
+
+        XCTAssertEqual(recorder.startCount, 0)
+        XCTAssertNil(cleaner.receivedText)
+        XCTAssertTrue(inserter.inserted.isEmpty)
+        XCTAssertEqual(coordinator.state, .notice("Not in a password field"))
+    }
+
+    // The accessibility half of the gate: a web password field, where secure
+    // event input may not be engaged. This one is only knowable after the
+    // recorder has started (locating the caret is cross-process IPC and must
+    // not sit ahead of the microphone), so the promise here is that the
+    // recording is thrown away and never leaves the machine.
+    func testASecureFocusedFieldDiscardsTheRecordingAndInsertsNothing() async {
+        let secure = CaretLocation(rectQuartz: nil, pid: 42, isSecureField: true)
+        let coordinator = makeCoordinator(cleaner: cleaner, caretProvider: { secure })
+        coordinator.handle(.began)
+        coordinator.handle(.ended)
+        await coordinator.waitForWork()
+
+        XCTAssertEqual(recorder.cancelCount, 1, "the started recording must be discarded")
+        XCTAssertNil(cleaner.receivedText)
+        XCTAssertTrue(inserter.inserted.isEmpty)
+        XCTAssertEqual(coordinator.state, .notice("Not in a password field"))
+        XCTAssertFalse(presenter.states.contains(.transcribing))
+    }
+
+    // A refusal must not wedge the coordinator: the next press works.
+    func testARefusalDoesNotBlockTheNextDictation() async {
+        var secureNow = true
+        let coordinator = DictationCoordinator(
+            recorder: recorder,
+            engineProvider: { [engine] in engine },
+            inserter: inserter,
+            cleaner: nil,
+            presenter: presenter,
+            preferences: prefs,
+            caretProvider: { .unknown },
+            secureInputProvider: { secureNow },
+            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
+        )
+        coordinator.handle(.began)
+        XCTAssertEqual(coordinator.state, .notice("Not in a password field"))
+
+        secureNow = false
+        coordinator.handle(.began)
+        coordinator.handle(.ended)
+        await coordinator.waitForWork()
+
+        XCTAssertEqual(recorder.startCount, 1)
+        XCTAssertEqual(inserter.inserted.count, 1)
+    }
+
+    // The caret query is cross-process IPC into whatever app is frontmost,
+    // and a slow one used to sit between the key press and the microphone —
+    // inside the user's first syllable. It has to run after start().
+    func testTheCaretIsLookedUpOnlyAfterTheRecorderIsRunning() async {
+        var startCountWhenCaretQueried = -1
+        let recorder = self.recorder!
+        let coordinator = makeCoordinator(caretProvider: {
+            startCountWhenCaretQueried = recorder.startCount
+            return .unknown
+        })
+        coordinator.handle(.began)
+
+        XCTAssertEqual(startCountWhenCaretQueried, 1)
+        XCTAssertEqual(coordinator.state, .recording)
     }
 
     // A denied microphone (or any other recorder.start() failure) must
@@ -275,15 +360,8 @@ final class DictationCoordinatorTests: XCTestCase {
     // not installed yet), and it must recover without a relaunch.
     func testFailureDoesNotBlockTheNextDictation() async {
         var engineAvailable = false
-        let coordinator = DictationCoordinator(
-            recorder: recorder,
-            engineProvider: { [engine] in engineAvailable ? engine : nil },
-            inserter: inserter,
-            cleaner: nil,
-            presenter: presenter,
-            preferences: prefs,
-            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
-        )
+        let coordinator = makeCoordinator(
+            engineProvider: { [engine] in engineAvailable ? engine : nil })
 
         coordinator.handle(.began)
         await coordinator.waitForWork()
@@ -307,15 +385,7 @@ final class DictationCoordinatorTests: XCTestCase {
     // transition through .idle to prevent that; this is the regression guard,
     // since the bug shipped once already.
     func testARepeatedIdenticalFailureStillReachesThePresenter() async {
-        let coordinator = DictationCoordinator(
-            recorder: recorder,
-            engineProvider: { nil },
-            inserter: inserter,
-            cleaner: nil,
-            presenter: presenter,
-            preferences: prefs,
-            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
-        )
+        let coordinator = makeCoordinator(engineProvider: { nil })
 
         coordinator.handle(.began)
         coordinator.handle(.began)

@@ -26,6 +26,15 @@ protocol DictationPresenting: AnyObject {
 
 typealias EngineProvider = () -> TranscriptionEngine?
 
+/// Where the caret is, and whether dictating there is allowed at all.
+/// Injected so the refusal path — the one place a bug means shipping a
+/// password to a third party — is testable without a real focused app, and
+/// so tests never set accessibility attributes on whatever happens to be
+/// frontmost while they run.
+typealias CaretProvider = () -> CaretLocation
+/// The cheap, in-process half of the same question (`IsSecureEventInputEnabled`).
+typealias SecureInputProvider = () -> Bool
+
 /// The single stateful component: turns hotkey signals into recorded audio,
 /// text, and a paste. Everything it touches is a protocol so the whole state
 /// machine runs in tests without a mic, a model, or a keyboard.
@@ -53,6 +62,8 @@ final class DictationCoordinator {
     private let cleaner: TextCleaning?
     private let presenter: DictationPresenting
     private let preferences: Preferences
+    private let caretProvider: CaretProvider
+    private let secureInputProvider: SecureInputProvider
     private let config: Config
 
     private var location: CaretLocation = .unknown
@@ -76,6 +87,8 @@ final class DictationCoordinator {
         cleaner: TextCleaning?,
         presenter: DictationPresenting,
         preferences: Preferences,
+        caretProvider: @escaping CaretProvider = CaretLocator.current,
+        secureInputProvider: @escaping SecureInputProvider = CaretLocator.isSecureInputActive,
         config: Config = Config()
     ) {
         self.recorder = recorder
@@ -84,6 +97,8 @@ final class DictationCoordinator {
         self.cleaner = cleaner
         self.presenter = presenter
         self.preferences = preferences
+        self.caretProvider = caretProvider
+        self.secureInputProvider = secureInputProvider
         self.config = config
     }
 
@@ -161,25 +176,63 @@ final class DictationCoordinator {
         // timer got around to firing.
         guard !isBusy else { return }
 
-        location = CaretLocator.current()
+        // The previous dictation's caret is not this one's: anything
+        // presented from here on (including a refusal or a failure) belongs
+        // at the fallback position rather than wherever the last one landed.
+        location = .unknown
+
         // Dictated text is sent to OpenRouter for cleanup, so recording into
-        // a password field would ship the password to a third party. This
-        // gate runs before the engine-availability check below on purpose:
-        // no dictation may start here no matter what else is true.
-        guard !location.isSecureField else {
-            notice("Not in a password field")
+        // a password field would ship the password to a third party. The
+        // cheap half of that gate — secure event input, which covers a sudo
+        // or ssh prompt in a terminal and every macOS auth dialog — runs
+        // first, before anything else is true or false: it is in-process,
+        // costs nothing, and needs no accessibility permission.
+        guard !secureInputProvider() else {
+            refuseSecureField(reason: "secure event input")
             return
         }
         guard engineProvider() != nil else {
             fail(TranscriptionError.noModelInstalled.localizedDescription)
             return
         }
+
+        // Nothing above this line touches the accessibility API, and nothing
+        // between here and `recorder.start()` may either. Locating the caret
+        // is cross-process IPC into whatever app is frontmost, which is
+        // exactly the kind of work `AudioRecorder`'s pre-warming exists to
+        // keep out of the user's first syllable. The panel is presented by
+        // the `state = .recording` write below, so `location` only has to be
+        // known by then, not before the microphone is capturing.
         do {
             try recorder.start()
-            state = .recording
         } catch {
             fail(error.localizedDescription)
+            return
         }
+
+        location = caretProvider()
+        // The accessibility half of the gate: a password field that secure
+        // event input did not cover (a web `input[type=password]`, say).
+        // Later than the check above, so the recording that already started
+        // has to be thrown away — `cancel()` stops the recorder and deletes
+        // its file, and nothing was transcribed, cleaned, or inserted.
+        guard !location.isSecureField else {
+            recorder.cancel()
+            location = .unknown
+            refuseSecureField(reason: "secure text field")
+            return
+        }
+        state = .recording
+    }
+
+    /// Both refusals show the same thing; the reason is logged rather than
+    /// displayed, because it is the only way to tell a genuine password
+    /// prompt from an app that left secure event input engaged behind it
+    /// (Terminal's "Secure Keyboard Entry" being the usual suspect) when a
+    /// user reports dictation refusing everywhere.
+    private func refuseSecureField(reason: String) {
+        Diagnostics.log("dictation refused: \(reason)")
+        notice("Not in a password field")
     }
 
     private func cancel() {

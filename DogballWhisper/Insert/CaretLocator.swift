@@ -1,12 +1,16 @@
 import AppKit
 import ApplicationServices
+import Carbon
+import QuartzCore
 
 struct CaretLocation: Equatable {
     /// Caret rect in Quartz screen coordinates (origin top-left), or nil when
     /// the focused app does not report one.
     let rectQuartz: CGRect?
     let pid: pid_t?
-    /// True when the focused element is a secure/password text field.
+    /// True when the focused element is a secure/password text field, or when
+    /// some app has secure event input engaged (a terminal password prompt,
+    /// an authorization dialog).
     /// `DictationCoordinator` checks this before starting a recording:
     /// dictated text is sent to OpenRouter for cleanup, so recording into a
     /// password field would ship a password to a third party. This is kept
@@ -28,20 +32,43 @@ struct CaretLocation: Equatable {
 /// what remains after that is expected: callers fall back to a fixed panel
 /// position.
 ///
-/// Pipeline: root the query at the frontmost app (not the system-wide
-/// element), nudge Chromium/Electron apps into building their accessibility
-/// tree, descend from the reported focused element to the text leaf that
-/// actually owns a selection, then try three tiers for the caret rect
-/// (WebKit/Chromium text-marker range, AppKit selected-range bounds, the
-/// focused element's own frame as a last resort).
+/// Pipeline: refuse immediately if secure event input is engaged, root the
+/// query at the frontmost app (not the system-wide element), descend from the
+/// reported focused element to the text leaf that actually owns a selection,
+/// then try three tiers for the caret rect (WebKit/Chromium text-marker range,
+/// AppKit selected-range bounds, the focused element's own frame as a last
+/// resort).
+///
+/// Everything here is bounded. Each of these calls is cross-process IPC into
+/// an app that may be busy or wedged, and the whole thing runs on the main
+/// actor while the user is already talking, so there is a messaging timeout
+/// on every app element, and the tree walk has both a node budget and a
+/// wall-clock deadline. Running out of any of them degrades to "no caret",
+/// never to a stall.
 enum CaretLocator {
-    // PIDs already nudged into exposing their accessibility tree (see
-    // `nudgeChromiumAXIfNeeded`). Read/written only from the main actor in
-    // practice (`DictationCoordinator.begin()` is `@MainActor`), but this is
-    // `static` state touched from a plain, non-isolated `enum`, so the lock
-    // makes that safe rather than merely assumed.
-    nonisolated(unsafe) private static var nudgedPIDs: Set<pid_t> = []
-    private static let nudgedPIDsLock = NSLock()
+    /// Wall-clock ceiling for a single cross-process AX request. Without it,
+    /// one hung app blocks the main thread for seconds while the user is
+    /// mid-sentence.
+    static let messagingTimeout: Float = 0.05
+
+    // Apps already nudged into exposing their accessibility tree (see
+    // `nudge`), keyed by PID with the launch date as the value: PIDs are
+    // recycled, and a newly launched Electron app landing on a recycled PID
+    // must not be mistaken for one that has already been nudged. Terminated
+    // apps are dropped by the observer in `startObservingAppSwitches()`; the
+    // launch-date value is the belt-and-braces half of that, for a PID
+    // recycled before the termination notification is processed.
+    //
+    // Touched from the main actor (`DictationCoordinator.begin()`) and from
+    // `nudgeQueue`, so the lock is load-bearing rather than decorative.
+    nonisolated(unsafe) private static var nudgedApps: [pid_t: Date] = [:]
+    private static let nudgedAppsLock = NSLock()
+    nonisolated(unsafe) private static var isObservingAppSwitches = false
+
+    /// The nudge is cross-process IPC and never needs an answer, so it stays
+    /// off the main thread entirely.
+    private static let nudgeQueue = DispatchQueue(
+        label: "com.jonclegg.DogballWhisper.CaretLocator.nudge", qos: .utility)
 
     /// A real caret is a thin vertical bar; a rect this tall is a whole
     /// paragraph, document, or window instead of an insertion point, and
@@ -55,9 +82,27 @@ enum CaretLocator {
         plausibleCaretHeightRange.contains(rect.height)
     }
 
+    /// True when any app has secure event input engaged: a `sudo`/`ssh`/`gpg`
+    /// prompt in a terminal, a `SecurityAgent` authorization dialog, a
+    /// browser password field. This is the cheap half of the secure check —
+    /// in-process, no accessibility permission needed, no IPC — and the only
+    /// signal that catches terminal password prompts at all, since those are
+    /// ordinary `AXTextArea`s with nothing secure about them as far as the
+    /// accessibility tree is concerned.
+    static func isSecureInputActive() -> Bool {
+        IsSecureEventInputEnabled()
+    }
+
     static func current() -> CaretLocation {
         let frontApp = NSWorkspace.shared.frontmostApplication
         let frontPID = frontApp?.processIdentifier
+
+        // First, before any AX work: a password being typed anywhere is a
+        // refusal no matter what the accessibility tree says.
+        guard !isSecureInputActive() else {
+            return CaretLocation(rectQuartz: nil, pid: frontPID, isSecureField: true)
+        }
+
         guard AXIsProcessTrusted() else { return CaretLocation(rectQuartz: nil, pid: frontPID) }
         guard let frontPID else { return .unknown }
 
@@ -71,22 +116,25 @@ enum CaretLocator {
         // actually answers. This one change is what fixes the common
         // "browser reports no caret" failure.
         let appElement = AXUIElementCreateApplication(frontPID)
-
-        let justNudged = nudgeChromiumAXIfNeeded(appElement: appElement, pid: frontPID)
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
 
         var focusedRef: CFTypeRef?
         var focusErr = AXUIElementCopyAttributeValue(
             appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef)
-        if justNudged, focusErr != .success {
-            // Chromium and Electron build their accessibility tree lazily,
-            // starting only once the nudge above tells them to. Querying
-            // immediately after a fresh nudge frequently lands before that
-            // tree exists; one short sleep-and-retry usually gets past it,
-            // and it only ever happens once per process (see the PID cache
-            // in `nudgeChromiumAXIfNeeded`), not on every keystroke.
-            Thread.sleep(forTimeInterval: 0.06)
-            focusErr = AXUIElementCopyAttributeValue(
-                appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+        if focusErr != .success {
+            // The failure itself is the signal that this app has not built
+            // an accessibility tree, which is the only case that warrants
+            // the nudge (see `nudge` for why it is not applied blindly).
+            // Chromium and Electron build the tree lazily and asynchronously,
+            // so the retry below usually still fails on this very first
+            // press; the point of nudging here is the *next* press, and the
+            // activation observer normally gets there first anyway. There is
+            // deliberately no sleep-and-retry: this runs while the user is
+            // already talking.
+            if nudge(pid: frontPID, launchDate: frontApp?.launchDate, requireChromiumLikeBundle: false) {
+                focusErr = AXUIElementCopyAttributeValue(
+                    appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+            }
         }
         // Bind the ref before asking for its type: `CFGetTypeID` takes an
         // implicitly unwrapped argument and traps on nil, and every failure
@@ -109,14 +157,16 @@ enum CaretLocator {
         // AXWebArea, AXScrollArea, AXGroup, or even the window) rather than
         // the text leaf that actually owns the selection. Descend to find
         // one that does before trying any of the rect tiers below.
-        if let leaf = descendToTextLeaf(from: element) {
+        switch descendToTextLeaf(from: element) {
+        case .secure:
+            // A password field found somewhere under the container that was
+            // reported as focused. Every node the walk touches is checked,
+            // not just the leaf it settles on.
+            return CaretLocation(rectQuartz: nil, pid: pid, isSecureField: true)
+        case .leaf(let leaf):
             element = leaf
-            // The leaf found by descending can turn out to be the secure
-            // field even when the container it was found under did not
-            // report itself as one.
-            if isSecureField(element) {
-                return CaretLocation(rectQuartz: nil, pid: pid, isSecureField: true)
-            }
+        case .none:
+            break
         }
 
         if let rect = caretRectViaTextMarker(element), isPlausibleCaretRect(rect) {
@@ -134,9 +184,11 @@ enum CaretLocator {
     // MARK: - Secure field detection
 
     private static func isSecureField(_ element: AXUIElement) -> Bool {
-        let subrole = copyStringAttribute(element, kAXSubroleAttribute as CFString)
-        let role = copyStringAttribute(element, kAXRoleAttribute as CFString)
-        return subrole == (kAXSecureTextFieldSubrole as String) || role == "AXSecureTextField"
+        // macOS reports this as a *subrole* (`AXSecureTextField`) on an
+        // ordinary `AXTextField` role, in native apps and in WebKit/Chromium
+        // for `input[type=password]` alike.
+        copyStringAttribute(element, kAXSubroleAttribute as CFString)
+            == (kAXSecureTextFieldSubrole as String)
     }
 
     // MARK: - Descend to the text leaf that actually owns a selection
@@ -147,6 +199,27 @@ enum CaretLocator {
     /// Small on purpose: this only needs to reach past a handful of wrapper
     /// containers, not walk an app's entire view hierarchy.
     private static let maxDescendDepth = 6
+    /// Depth alone does not bound the walk: a node that does not report a
+    /// focused child contributes *all* of its children, and a real web area
+    /// six levels deep is thousands of nodes, each costing cross-process
+    /// round trips. This is the actual bound.
+    static let maxDescendNodes = 48
+    /// And this is the bound that matters when the app on the other end is
+    /// slow rather than large. The user is already talking by the time this
+    /// runs, so it is deliberately tight.
+    static let maxDescendDuration: CFTimeInterval = 0.012
+    /// No node needs more than a handful of siblings inspected; a container
+    /// with hundreds of children is a list, not a text field's wrapper.
+    private static let maxChildrenPerNode = 16
+
+    private enum Descent {
+        /// A better element than the root to ask for a caret rect.
+        case leaf(AXUIElement)
+        /// A password field was found during the walk: refuse the dictation.
+        case secure
+        /// Nothing better found (or the budget ran out): stay on the root.
+        case none
+    }
 
     private static func hasSelectedTextRange(_ element: AXUIElement) -> Bool {
         var raw: CFTypeRef?
@@ -154,23 +227,63 @@ enum CaretLocator {
             element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success && raw != nil
     }
 
+    private static func isFocused(_ element: AXUIElement) -> Bool {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXFocusedAttribute as CFString, &raw) == .success,
+            let value = raw, CFGetTypeID(value) == CFBooleanGetTypeID()
+        else { return false }
+        return CFBooleanGetValue((value as! CFBoolean))
+    }
+
+    private static func children(of element: AXUIElement) -> [AXUIElement] {
+        var childrenRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXChildrenAttribute as CFString, &childrenRaw) == .success,
+            // The one cast here that leans on the runtime's own element check
+            // rather than a per-element `CFGetTypeID`: a bridged `as?` to
+            // `[AXUIElement]` verifies every member and yields nil on any
+            // mismatch, so a malformed answer degrades instead of trapping.
+            // That is deliberate, not an oversight.
+            let children = childrenRaw as? [AXUIElement]
+        else { return [] }
+        return children
+    }
+
     /// Breadth-first search, preferring each node's own focused child, for
-    /// the first descendant that reports a selected-text range. Returns nil
-    /// (stay on `root`) when `root` already is a text leaf with a selection,
-    /// or when nothing better is found within `maxDescendDepth`.
-    private static func descendToTextLeaf(from root: AXUIElement) -> AXUIElement? {
+    /// the first descendant that reports a selected-text range. Returns
+    /// `.none` (stay on `root`) when `root` already is a text leaf with a
+    /// selection, when nothing better is found within the depth limit, or
+    /// when the node budget or deadline runs out first.
+    ///
+    /// Every node it touches is also checked for being a password field:
+    /// the container reported as focused frequently is not the secure leaf
+    /// underneath it, and refusing has to win over positioning a panel.
+    private static func descendToTextLeaf(from root: AXUIElement) -> Descent {
         let rootRole = copyStringAttribute(root, kAXRoleAttribute as CFString) ?? ""
         if textLeafRoles.contains(rootRole) && hasSelectedTextRange(root) {
-            return nil
+            return .none
         }
 
+        let deadline = CACurrentMediaTime() + maxDescendDuration
         var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
-        while !queue.isEmpty {
-            let (node, depth) = queue.removeFirst()
+        // An index cursor rather than `removeFirst()`, which is O(n) on an
+        // Array and would make the walk quadratic in the node budget.
+        var cursor = 0
+        var budget = maxDescendNodes
+
+        while cursor < queue.count {
+            guard budget > 0, CACurrentMediaTime() < deadline else { return .none }
+            budget -= 1
+            let (node, depth) = queue[cursor]
+            cursor += 1
+
             if depth > 0 {
+                // `root` was already checked by the caller.
+                if isSecureField(node) { return .secure }
                 let role = copyStringAttribute(node, kAXRoleAttribute as CFString) ?? ""
                 if hasSelectedTextRange(node) && (textLeafRoles.contains(role) || role != rootRole) {
-                    return node
+                    return .leaf(node)
                 }
             }
             guard depth < maxDescendDepth else { continue }
@@ -183,40 +296,127 @@ enum CaretLocator {
                 queue.append((next as! AXUIElement, depth + 1))
                 continue
             }
-            var childrenRaw: CFTypeRef?
-            if AXUIElementCopyAttributeValue(
-                node, kAXChildrenAttribute as CFString, &childrenRaw) == .success,
-                let children = childrenRaw as? [AXUIElement]
-            {
-                for child in children {
-                    queue.append((child, depth + 1))
-                }
+
+            // Falling back to children is where an unbounded walk would blow
+            // up, so spend a probe per child to find the focused one(s) and
+            // follow only those; fanning out across every child is the last
+            // resort, and even then only up to `maxChildrenPerNode`.
+            let candidates = Array(children(of: node).prefix(maxChildrenPerNode))
+            guard !candidates.isEmpty else { continue }
+            var focusedChildren: [AXUIElement] = []
+            for child in candidates {
+                guard budget > 0, CACurrentMediaTime() < deadline else { break }
+                budget -= 1
+                if isFocused(child) { focusedChildren.append(child) }
+            }
+            for child in focusedChildren.isEmpty ? candidates : focusedChildren {
+                queue.append((child, depth + 1))
             }
         }
-        return nil
+        return .none
     }
 
     // MARK: - Chromium / Electron AX opt-in
 
+    /// Starts nudging Chromium- and Electron-based apps into building their
+    /// accessibility tree when they are activated, which is long before the
+    /// dictation key is pressed. Call once at launch.
+    ///
+    /// Doing this on activation rather than inside `current()` is the whole
+    /// point: the tree is built while the user is still reaching for the
+    /// hotkey, and no part of it lands between the key press and
+    /// `AudioRecorder.start()`.
+    @MainActor
+    static func startObservingAppSwitches() {
+        guard !isObservingAppSwitches else { return }
+        isObservingAppSwitches = true
+
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication
+            else { return }
+            // Read everything needed off the notification here and hand the
+            // background queue value types only.
+            let pid = app.processIdentifier
+            let launchDate = app.launchDate
+            let bundleURL = app.bundleURL
+            nudgeQueue.async {
+                _ = nudge(
+                    pid: pid, launchDate: launchDate, bundleURL: bundleURL,
+                    requireChromiumLikeBundle: true)
+            }
+        }
+        center.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication
+            else { return }
+            forgetNudge(pid: app.processIdentifier)
+        }
+    }
+
+    static func forgetNudge(pid: pid_t) {
+        nudgedAppsLock.lock()
+        nudgedApps.removeValue(forKey: pid)
+        nudgedAppsLock.unlock()
+    }
+
+    /// Sets the two attributes that make a Chromium- or Electron-based app
+    /// build out its accessibility tree, at most once per process.
+    ///
+    /// `AXEnhancedUserInterface` is the flag VoiceOver sets, and it is not
+    /// free: on native AppKit apps it changes window-resize and animation
+    /// behavior (the thing window managers fight with), and it is never
+    /// unset. So it is applied only to apps that look Chromium/Electron
+    /// (the activation path) or that have already failed to answer
+    /// `kAXFocusedUIElementAttribute` at all, which is the signal that no
+    /// tree exists to query (the `current()` path).
+    /// `AXManualAccessibility` is Electron-specific and inert elsewhere.
+    ///
+    /// Returns true when this call is what performed the nudge.
     @discardableResult
-    private static func nudgeChromiumAXIfNeeded(appElement: AXUIElement, pid: pid_t) -> Bool {
-        nudgedPIDsLock.lock()
-        let alreadyNudged = nudgedPIDs.contains(pid)
-        if !alreadyNudged { nudgedPIDs.insert(pid) }
-        nudgedPIDsLock.unlock()
+    private static func nudge(
+        pid: pid_t,
+        launchDate: Date?,
+        bundleURL: URL? = nil,
+        requireChromiumLikeBundle: Bool
+    ) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        if requireChromiumLikeBundle, !looksChromiumOrElectron(bundleURL: bundleURL) {
+            return false
+        }
+
+        let stamp = launchDate ?? .distantPast
+        nudgedAppsLock.lock()
+        let alreadyNudged = nudgedApps[pid] == stamp
+        if !alreadyNudged { nudgedApps[pid] = stamp }
+        nudgedAppsLock.unlock()
         guard !alreadyNudged else { return false }
 
-        // Chromium- and Electron-based apps (Chrome, VS Code, Slack,
-        // Discord, ...) do not build out their accessibility tree by
-        // default: they only start doing so once something asks them to,
-        // which is exactly why this class of app used to report nothing
-        // here. Setting these two attributes on the *application* element
-        // is that ask. It is a one-time opt-in per process — hence the PID
-        // cache above — because re-setting it on every keystroke would just
-        // be wasted cross-process IPC for no further effect.
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
         AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         return true
+    }
+
+    /// Chromium and Electron both ship their engine as a framework whose name
+    /// ends in " Framework.framework" ("Google Chrome Framework.framework",
+    /// "Electron Framework.framework", "Microsoft Edge Framework.framework"),
+    /// alongside the renderer helper apps. Ordinary AppKit apps do not, which
+    /// is what keeps `AXEnhancedUserInterface` away from them.
+    static func looksChromiumOrElectron(bundleURL: URL?) -> Bool {
+        guard let bundleURL else { return false }
+        let frameworks = bundleURL.appendingPathComponent("Contents/Frameworks")
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: frameworks.path)
+        else { return false }
+        return names.contains { name in
+            name.hasSuffix(" Framework.framework") || name.hasSuffix("Helper (Renderer).app")
+        }
     }
 
     // MARK: - Tier 1: WebKit / Chromium text-marker range
@@ -295,7 +495,17 @@ enum CaretLocator {
         if let sizeValue = sizeRaw, CFGetTypeID(sizeValue) == AXValueGetTypeID() {
             _ = AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
         }
-        return caretRect(fromElementOrigin: origin, size: size)
+        guard let rect = caretRect(fromElementOrigin: origin, size: size) else { return nil }
+        // An element can report a perfectly well-formed frame that is
+        // nowhere any display can show it — scrolled out of a clipping view,
+        // or in a window on a display that has since been disconnected.
+        // Positioning the panel from that rect makes `PanelPositioner` clamp
+        // it to an arbitrary screen edge; returning nil instead gets the
+        // predictable bottom-center fallback. The synthesized sliver is
+        // checked rather than the raw frame because the sliver is what
+        // actually places the panel.
+        guard isOnScreen(quartzRect: rect) else { return nil }
+        return rect
     }
 
     /// Pure geometry, factored out of `caretRectFromElementFrame` so it can
@@ -321,6 +531,28 @@ enum CaretLocator {
     }
 
     // MARK: - Small helpers
+
+    private static func isOnScreen(quartzRect: CGRect) -> Bool {
+        isOnScreen(
+            quartzRect: quartzRect,
+            screenFramesCocoa: NSScreen.screens.map(\.frame),
+            primaryScreenMaxY: NSScreen.screens.first?.frame.maxY ?? 0)
+    }
+
+    /// Pure geometry, testable without a display: AX reports top-left origins
+    /// and `NSScreen` uses bottom-left, the same flip `DictationPanel` does
+    /// when picking which screen a caret is on.
+    static func isOnScreen(
+        quartzRect: CGRect, screenFramesCocoa: [CGRect], primaryScreenMaxY: CGFloat
+    ) -> Bool {
+        guard !screenFramesCocoa.isEmpty else { return false }
+        let cocoaRect = CGRect(
+            x: quartzRect.minX,
+            y: primaryScreenMaxY - quartzRect.maxY,
+            width: quartzRect.width,
+            height: quartzRect.height)
+        return screenFramesCocoa.contains { $0.intersects(cocoaRect) }
+    }
 
     private static func isFiniteRect(_ rect: CGRect) -> Bool {
         rect.origin.x.isFinite && rect.origin.y.isFinite

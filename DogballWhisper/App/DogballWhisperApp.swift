@@ -44,6 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.coordinator = coordinator
 
+        // Chromium and Electron apps only build an accessibility tree once
+        // something asks them to. Asking when they are activated means the
+        // tree is ready long before the dictation key is pressed, instead of
+        // that work sitting between the key press and the microphone.
+        CaretLocator.startObservingAppSwitches()
+
         installEditMenu()
 
         let menuBar = MenuBarController(

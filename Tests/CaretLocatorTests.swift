@@ -2,9 +2,11 @@ import XCTest
 @testable import DogballWhisper
 
 /// The AX calls in `CaretLocator` need a real focused app and cannot run
-/// here, so this covers the pure geometry factored out for exactly that
-/// reason: the plausibility band tiers 1/2 are held to, and the synthesized
-/// sliver tier 3 falls back to.
+/// here, so this covers everything factored out for exactly that reason:
+/// the plausibility band tiers 1/2 are held to, the synthesized sliver tier
+/// 3 falls back to, the on-screen test that keeps tier 3 from placing the
+/// panel off every display, which bundles are allowed to be nudged, and the
+/// budget that keeps the tree walk off the user's first syllable.
 final class CaretLocatorTests: XCTestCase {
     // MARK: - isPlausibleCaretRect
 
@@ -29,36 +31,35 @@ final class CaretLocatorTests: XCTestCase {
 
     // MARK: - caretRect(fromElementOrigin:size:)
 
-    func testElementFrameSynthesizesASliverNotTheWholeFrame() {
-        let rect = CaretLocator.caretRect(
-            fromElementOrigin: CGPoint(x: 100, y: 200), size: CGSize(width: 300, height: 40))
-        XCTAssertNotNil(rect)
-        XCTAssertEqual(rect!.width, 1)
-        XCTAssertEqual(rect!.origin.x, 104)
-        XCTAssertEqual(rect!.origin.y, 204)
-        XCTAssertTrue(CaretLocator.isPlausibleCaretRect(rect!))
+    func testElementFrameSynthesizesASliverNotTheWholeFrame() throws {
+        let rect = try XCTUnwrap(
+            CaretLocator.caretRect(
+                fromElementOrigin: CGPoint(x: 100, y: 200), size: CGSize(width: 300, height: 40)))
+        XCTAssertEqual(rect.width, 1)
+        XCTAssertEqual(rect.origin.x, 104)
+        XCTAssertEqual(rect.origin.y, 204)
+        XCTAssertTrue(CaretLocator.isPlausibleCaretRect(rect))
     }
 
     // A whole AXWebArea (or any other giant frame reached when descent
     // failed to find a real leaf) must still come back inside the
     // plausible band instead of being rejected outright — that is the
     // entire point of tier 3 existing.
-    func testAGiantElementFrameIsClampedIntoThePlausibleBand() {
-        let rect = CaretLocator.caretRect(
-            fromElementOrigin: CGPoint(x: 0, y: 0), size: CGSize(width: 1920, height: 5000))
-        XCTAssertNotNil(rect)
-        XCTAssertTrue(CaretLocator.isPlausibleCaretRect(rect!))
-        XCTAssertEqual(rect!.height, CaretLocator.plausibleCaretHeightRange.upperBound)
+    func testAGiantElementFrameIsClampedIntoThePlausibleBand() throws {
+        let rect = try XCTUnwrap(
+            CaretLocator.caretRect(
+                fromElementOrigin: CGPoint(x: 0, y: 0), size: CGSize(width: 1920, height: 5000)))
+        XCTAssertTrue(CaretLocator.isPlausibleCaretRect(rect))
+        XCTAssertEqual(rect.height, CaretLocator.plausibleCaretHeightRange.upperBound)
     }
 
     // A short field (a one-line search box, say) below the 18pt floor
     // still gets a usable, non-degenerate sliver rather than a near-zero
     // height rect.
-    func testATinyElementFrameIsRaisedToAUsableMinimum() {
-        let rect = CaretLocator.caretRect(
-            fromElementOrigin: .zero, size: CGSize(width: 40, height: 4))
-        XCTAssertNotNil(rect)
-        XCTAssertEqual(rect!.height, 18)
+    func testATinyElementFrameIsRaisedToAUsableMinimum() throws {
+        let rect = try XCTUnwrap(
+            CaretLocator.caretRect(fromElementOrigin: .zero, size: CGSize(width: 40, height: 4)))
+        XCTAssertEqual(rect.height, 18)
     }
 
     func testAZeroSizeFrameYieldsNoRect() {
@@ -72,6 +73,106 @@ final class CaretLocatorTests: XCTestCase {
         XCTAssertNil(
             CaretLocator.caretRect(
                 fromElementOrigin: .zero, size: CGSize(width: CGFloat.infinity, height: 20)))
+    }
+
+    // MARK: - isOnScreen
+    //
+    // Tier 3 will happily report a rect for an element scrolled out of every
+    // display; the panel would then be clamped to some arbitrary screen edge
+    // instead of using the predictable bottom-center fallback.
+
+    private let primaryMaxY: CGFloat = 1000
+    private let primary = CGRect(x: 0, y: 0, width: 1600, height: 1000)
+
+    func testARectOnThePrimaryScreenIsOnScreen() {
+        // Quartz y=100 from the top is Cocoa y=880 on a 1000pt-tall primary.
+        XCTAssertTrue(
+            CaretLocator.isOnScreen(
+                quartzRect: CGRect(x: 200, y: 100, width: 1, height: 20),
+                screenFramesCocoa: [primary], primaryScreenMaxY: primaryMaxY))
+    }
+
+    func testARectScrolledOffEveryDisplayIsNotOnScreen() {
+        XCTAssertFalse(
+            CaretLocator.isOnScreen(
+                quartzRect: CGRect(x: 200, y: -4000, width: 1, height: 20),
+                screenFramesCocoa: [primary], primaryScreenMaxY: primaryMaxY))
+        XCTAssertFalse(
+            CaretLocator.isOnScreen(
+                quartzRect: CGRect(x: 9000, y: 100, width: 1, height: 20),
+                screenFramesCocoa: [primary], primaryScreenMaxY: primaryMaxY))
+    }
+
+    // A caret on a second display to the left (negative Cocoa x) is on
+    // screen, and must not be thrown away by a primary-screen-only test.
+    func testARectOnASecondaryDisplayIsOnScreen() {
+        let secondary = CGRect(x: -1440, y: 0, width: 1440, height: 900)
+        XCTAssertTrue(
+            CaretLocator.isOnScreen(
+                quartzRect: CGRect(x: -700, y: 300, width: 1, height: 20),
+                screenFramesCocoa: [primary, secondary], primaryScreenMaxY: primaryMaxY))
+    }
+
+    func testNoScreensMeansNothingIsOnScreen() {
+        XCTAssertFalse(
+            CaretLocator.isOnScreen(
+                quartzRect: CGRect(x: 200, y: 100, width: 1, height: 20),
+                screenFramesCocoa: [], primaryScreenMaxY: 0))
+    }
+
+    // MARK: - Chromium/Electron detection
+    //
+    // What decides whether an app gets `AXEnhancedUserInterface` set on it.
+    // Native AppKit apps must not: it is the flag VoiceOver sets, it changes
+    // window-resize and animation behavior, and it is never unset.
+
+    private func makeBundle(frameworkNames: [String]?) throws -> URL {
+        let bundle = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dogball-\(UUID().uuidString).app")
+        if let frameworkNames {
+            let frameworks = bundle.appendingPathComponent("Contents/Frameworks")
+            try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
+            for name in frameworkNames {
+                try FileManager.default.createDirectory(
+                    at: frameworks.appendingPathComponent(name), withIntermediateDirectories: true)
+            }
+        } else {
+            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: bundle) }
+        return bundle
+    }
+
+    func testAnElectronBundleLooksChromiumOrElectron() throws {
+        let bundle = try makeBundle(frameworkNames: [
+            "Electron Framework.framework", "Squirrel.framework",
+        ])
+        XCTAssertTrue(CaretLocator.looksChromiumOrElectron(bundleURL: bundle))
+    }
+
+    func testAChromiumBundleLooksChromiumOrElectron() throws {
+        let bundle = try makeBundle(frameworkNames: ["Google Chrome Framework.framework"])
+        XCTAssertTrue(CaretLocator.looksChromiumOrElectron(bundleURL: bundle))
+    }
+
+    func testANativeAppBundleDoesNot() throws {
+        XCTAssertFalse(
+            CaretLocator.looksChromiumOrElectron(
+                bundleURL: try makeBundle(frameworkNames: ["Sparkle.framework"])))
+        XCTAssertFalse(
+            CaretLocator.looksChromiumOrElectron(bundleURL: try makeBundle(frameworkNames: nil)))
+        XCTAssertFalse(CaretLocator.looksChromiumOrElectron(bundleURL: nil))
+    }
+
+    // MARK: - Walk bounds
+
+    // The descent runs on the main actor while the user is already talking,
+    // and every node it visits is several cross-process round trips. Depth
+    // alone does not bound it; these do.
+    func testTheDescentBudgetStaysSmallEnoughForTheHotPath() {
+        XCTAssertLessThanOrEqual(CaretLocator.maxDescendNodes, 60)
+        XCTAssertLessThanOrEqual(CaretLocator.maxDescendDuration, 0.015)
+        XCTAssertLessThanOrEqual(CaretLocator.messagingTimeout, 0.05)
     }
 
     // MARK: - CaretLocation

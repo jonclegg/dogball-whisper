@@ -71,12 +71,31 @@ rebuilding it for each one.
       focused app is unaffected (for example, esc still closes a dialog)
 - [ ] Secure-field refusal: click into a password field (Safari or Chrome's
       own sign-in form works, or any macOS password prompt) and hold the
-      dictation key. Recording never starts — no mic level animation, no
-      "Recording" panel — and the panel shows the notice "Not in a password
-      field" instead. Confirm nothing is pasted and no request is made to
-      OpenRouter (this is the one case a leak would mean shipping a
-      password to a third party, so treat any deviation as a blocker, not
-      a nit)
+      dictation key. No "Recording" panel appears; the panel shows the
+      notice "Not in a password field" instead. Confirm nothing is pasted
+      and no request is made to OpenRouter (this is the one case a leak
+      would mean shipping a password to a third party, so treat any
+      deviation as a blocker, not a nit). Note that for a *web* password
+      field the microphone does briefly open before the accessibility query
+      says to refuse — the caret query moved after `recorder.start()` to
+      keep it out of the user's first syllable — so the orange mic dot may
+      blink. What matters is that the recording is discarded and nothing is
+      transcribed, cleaned, or inserted
+- [ ] Terminal password prompt: run `sudo -k true` in Terminal, and at the
+      "Password:" prompt hold the dictation key. Recording never starts and
+      the panel shows "Not in a password field". A `sudo` prompt is an
+      ordinary `AXTextArea` — nothing in the accessibility tree says it is
+      secure — so this is entirely carried by `IsSecureEventInputEnabled()`,
+      checked before any AX work. Repeat at an `ssh` password prompt. Same
+      blocker rule as above: a transcript here goes to OpenRouter
+- [ ] **(never verified)** Secure input left engaged: turn on Terminal >
+      Secure Keyboard Entry (or focus a password field and ⌘-Tab away while
+      it is still focused) and dictate into TextEdit. Expect a refusal, and
+      note it: this is the known false-positive of the secure-event-input
+      check. `log show --last 5m --predicate 'subsystem ==
+      "com.jonclegg.DogballWhisper"' --info` shows "dictation refused:
+      secure event input", which is how a stuck refusal is told apart from
+      a real password field
 - [ ] Rebind to right ⌘ in Settings and confirm it works without a relaunch
 - [ ] Rebind to a custom combo (⌃⇧D) and confirm the keystroke does not
       reach the app you were typing in
@@ -138,15 +157,28 @@ the same apps.
 - [ ] Browser text field (Twitter/X compose box, and a Gmail compose body):
       panel floats just above the caret, not at the bottom of the screen.
       This is the main case `CaretLocator`'s app-rooted query plus text-leaf
-      descent exists for
+      descent exists for. Do it twice: once with the caret in a short input
+      (the search box) and once with focus on the page body of a long
+      article, which is the case that used to sweep thousands of
+      accessibility nodes. The descent is now capped at 48 nodes and 12ms,
+      so the second case may fall back to the bottom center — what must not
+      happen is a stall: the panel appears immediately either way, and no
+      audio is clipped from the front of the dictation
 - [ ] Electron app (VS Code's editor or find box, and a Slack message box):
-      panel floats just above the caret. This depends on the
-      `AXEnhancedUserInterface`/`AXManualAccessibility` nudge landing before
-      the first query — if the panel appears at the bottom center on the
-      *first* dictation in a freshly-focused Electron app but follows the
-      caret correctly from the second dictation onward, the nudge is
-      arriving but the tree isn't built yet on the very first query; note
-      that distinction rather than just pass/fail
+      panel floats just above the caret. The
+      `AXEnhancedUserInterface`/`AXManualAccessibility` nudge that this
+      depends on is now sent when the app is *activated*, not when the key
+      is pressed, so click into the app first (as any real use would) and
+      the tree should be built by the time you dictate. If the panel appears
+      at the bottom center on the *first* dictation and follows the caret
+      from the second onward, the nudge is arriving but the tree isn't built
+      yet; note that distinction rather than just pass/fail
+- [ ] Native app windows still behave: with the app running, resize and
+      zoom a few native AppKit windows (Finder, TextEdit, System Settings)
+      and use any window manager you normally do. Nothing should resize in
+      steps, lag, or fight back. `AXEnhancedUserInterface` is the flag that
+      causes that, and it is now only ever set on Chromium/Electron bundles
+      or on an app that answered nothing at all
 - [ ] A field where no rect at all is available: panel falls back to bottom
       center rather than to some earlier bad position, and nothing traps
 - [ ] Caret near the top of the screen: panel flips below it instead of
