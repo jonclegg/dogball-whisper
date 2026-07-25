@@ -4,6 +4,16 @@ A menu-bar dictation client for macOS. Hold right ⌥, talk, let go, and the
 text appears wherever you were typing. Transcription runs on this Mac; an
 optional OpenRouter pass strips ums and ahs.
 
+## Download
+
+[Latest release](https://github.com/jonclegg/dogball-whisper/releases/latest) —
+a notarized build for Apple Silicon, macOS 14 or later. Unzip it, drag
+`Dogball Whisper.app` into Applications, and open it. First launch walks you
+through microphone and Accessibility access and downloads a speech model.
+
+Grant Accessibility when asked: it carries both the hotkey and the paste.
+Input Monitoring is listed as optional and is usually unnecessary.
+
 ## Build and install
 
     ./scripts/build-mac.sh [--launch]   # builds Release, signs, installs to /Applications

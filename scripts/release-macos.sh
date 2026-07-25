@@ -49,9 +49,15 @@ xcodebuild \
 
 step "Verifying the signature and hardened runtime"
 codesign --verify --strict --verbose=2 "$APP_PATH"
-# 'runtime' in the flags is what notarization requires.
-codesign -d --verbose=2 "$APP_PATH" 2>&1 | grep -q "flags=.*runtime" \
-  || fail "Hardened Runtime is not enabled on the built app"
+# 'runtime' in the flags is what notarization requires. Capture first rather
+# than piping into `grep -q`: grep exits on the first match, codesign dies of
+# SIGPIPE, and `set -o pipefail` reports that as a failed check on a build that
+# was in fact correct.
+SIGNING_INFO="$(codesign -d --verbose=2 "$APP_PATH" 2>&1)"
+case "$SIGNING_INFO" in
+  *flags=*runtime*) ;;
+  *) fail "Hardened Runtime is not enabled on the built app" ;;
+esac
 # get-task-allow must be absent or the notary service rejects the submission.
 if codesign -d --entitlements - "$APP_PATH" 2>/dev/null | grep -q "get-task-allow"; then
   fail "get-task-allow is present; notarization will reject this build"
@@ -60,8 +66,24 @@ fi
 step "Notarizing (this waits on Apple, usually a few minutes)"
 mkdir -p "$DIST_DIR"
 ditto -c -k --keepParent "$APP_PATH" "$DIST_DIR/notarize.zip"
-xcrun notarytool submit "$DIST_DIR/notarize.zip" \
-  --keychain-profile "$NOTARY_PROFILE" --wait
+# `notarytool submit --wait` exits 0 even when the submission comes back
+# Invalid, so the status has to be read rather than trusted. Without this the
+# script sails on to stapling and fails there with a confusing CloudKit error
+# instead of Apple's actual reason.
+SUBMIT_OUTPUT="$(xcrun notarytool submit "$DIST_DIR/notarize.zip" \
+  --keychain-profile "$NOTARY_PROFILE" --wait 2>&1)"
+echo "$SUBMIT_OUTPUT"
+case "$SUBMIT_OUTPUT" in
+  *"status: Accepted"*) ;;
+  *)
+    SUBMISSION_ID="$(printf '%s\n' "$SUBMIT_OUTPUT" | awk '/^ *id: / { print $2; exit }')"
+    if [[ -n "$SUBMISSION_ID" ]]; then
+      printf "\n--- notary log for %s ---\n" "$SUBMISSION_ID"
+      xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "$NOTARY_PROFILE" || true
+    fi
+    fail "Notarization did not succeed"
+    ;;
+esac
 
 step "Stapling"
 xcrun stapler staple "$APP_PATH"
