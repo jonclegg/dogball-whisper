@@ -46,6 +46,8 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+      - path: Tests/Fixtures
+        buildPhase: resources
     dependencies:
       - target: DogballWhisper
     settings:
