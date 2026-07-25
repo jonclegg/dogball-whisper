@@ -26,16 +26,42 @@ final class FakeEngine: TranscriptionEngine {
     var error: Error?
     var delay: TimeInterval = 0
 
+    /// When true, `transcribe` parks on a continuation that only
+    /// `resumeUncooperativeTranscription()` can resume, and does not check
+    /// `Task.isCancelled` at all — simulating a real engine whose inference
+    /// call never observes cancellation. Exercises the coordinator's
+    /// generation-counter recovery path, which must not depend on the
+    /// engine's cooperation.
+    var isUncooperative = false
+    // `TranscriptionEngine` has synchronous, non-actor-isolated requirements
+    // (`kind`, `isLoaded`, `unload()`), so this type can't be `@MainActor`
+    // itself. Access to this property is serialized in practice: the test
+    // that uses uncooperative mode polls `coordinator.state` on the main
+    // actor before touching it from either side, so store/resume never
+    // actually race. `nonisolated(unsafe)` records that as a deliberate,
+    // manually-verified choice rather than leaving it to accidentally pass.
+    nonisolated(unsafe) private var pendingContinuation: CheckedContinuation<Void, Never>?
+
     func load() async throws {}
     func unload() {}
     func transcribe(_ audioURL: URL) async throws -> String {
-        if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        if isUncooperative {
+            await withCheckedContinuation { pendingContinuation = $0 }
+        } else if delay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
         if let error { throw error }
         return result
     }
+
+    /// Unblocks a `transcribe` call parked in uncooperative mode.
+    func resumeUncooperativeTranscription() {
+        pendingContinuation?.resume()
+        pendingContinuation = nil
+    }
 }
 
-final class FakeCleaner: TextCleaning {
+final class FakeCleaner: TextCleaning, @unchecked Sendable {
     var result = "So the thing is."
     var error: Error?
     var delay: TimeInterval = 0
@@ -301,6 +327,33 @@ final class DictationCoordinatorTests: XCTestCase {
             presenter.states.contains(where: { if case .failed = $0 { return true }; return false }))
     }
 
+    // The generation counter must recover the coordinator even when the
+    // engine itself never observes cancellation — the whole premise of the
+    // redesign, and previously untested since FakeEngine's delay-based mode
+    // sleeps via Task.sleep, which does observe cancellation.
+    func testAbortRecoversEvenWhenTheEngineNeverObservesCancellation() async {
+        engine.isUncooperative = true
+        let coordinator = makeCoordinator()
+        coordinator.handle(.began)
+        coordinator.handle(.ended)
+
+        // Give the pipeline a moment to enter the uncooperative engine call
+        // before aborting.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(coordinator.state, .transcribing)
+
+        coordinator.abort()
+        XCTAssertEqual(coordinator.state, .idle)
+
+        // The orphaned transcribe call is still parked; let it finish late
+        // and prove it can neither move state nor insert text.
+        engine.resumeUncooperativeTranscription()
+        await coordinator.waitForWork()
+
+        XCTAssertTrue(inserter.inserted.isEmpty)
+        XCTAssertEqual(coordinator.state, .idle)
+    }
+
     func testAbortWhileIdleDoesNothing() async {
         let coordinator = makeCoordinator()
         coordinator.abort()
@@ -351,5 +404,19 @@ final class DictationCoordinatorTests: XCTestCase {
         await dictate(coordinator)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    // The terminal-reset timer itself must actually fire, not just leave
+    // begin() able to recover from a resting terminal state.
+    func testTerminalStateReturnsToIdleOnItsOwnAfterTheDismissDelay() async {
+        engine.result = "   "
+        let coordinator = makeCoordinator(
+            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2, noticeDismissDelay: 0.05))
+        await dictate(coordinator)
+
+        XCTAssertEqual(coordinator.state, .notice("No speech"))
+
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(coordinator.state, .idle)
     }
 }

@@ -105,6 +105,12 @@ final class DictationCoordinator {
     func abort() {
         switch state {
         case .transcribing, .polishing:
+            // Invariant `finish()` relies on: cancellation and generation
+            // invalidation always happen together, from this one call site.
+            // That is what lets `finish()` treat `isCurrent(token)` alone as
+            // sufficient — see the guard at the top of `finish()`. A future
+            // stop-everything path must preserve this pairing rather than
+            // calling `work?.cancel()` on its own.
             generation += 1
             work?.cancel()
             abandon()
@@ -134,6 +140,18 @@ final class DictationCoordinator {
         // shown; nothing should reset state out from under the dictation
         // that is about to start.
         terminalResetTask?.cancel()
+
+        // Force a real transition through .idle first. Without this, a
+        // second press that fails identically to the first (e.g. two
+        // presses in a row with no model installed) would set the exact
+        // same `.failed(message)` value again; the `didSet` equality guard
+        // would then suppress `present()` even though `dismiss(after:)`
+        // still fires, leaving the user with a dismiss timer and no
+        // display to dismiss.
+        switch state {
+        case .failed, .notice: state = .idle
+        case .idle, .recording, .transcribing, .polishing: break
+        }
 
         // A prior failure or notice is a resting, non-busy display, not a
         // lock: only active recording/transcription/cleanup should block a
@@ -189,10 +207,12 @@ final class DictationCoordinator {
         defer { try? FileManager.default.removeItem(at: audio.url) }
 
         // Covers cancellation observed before the engine's first suspension
-        // point (esc pressed between `end()` and the first `await`), and a
-        // token already invalidated by `abort()`. Either way, `abort()`
-        // already reset the UI synchronously, so this only needs to return.
-        guard isCurrent(token), !Task.isCancelled else { return }
+        // point (esc pressed between `end()` and the first `await`): abort()
+        // always bumps `generation` in the same call that cancels the task
+        // (see the comment there), so the token check alone is sufficient —
+        // a separate `Task.isCancelled` check would be redundant with it as
+        // long as that pairing holds.
+        guard isCurrent(token) else { return }
 
         guard let engine = engineProvider() else {
             fail(TranscriptionError.noModelInstalled.localizedDescription)
@@ -220,7 +240,7 @@ final class DictationCoordinator {
             return
         }
 
-        let finalText = await cleanIfEnabled(trimmed)
+        let finalText = await cleanIfEnabled(trimmed, token: token)
 
         // One last check: aborting during cleanup, or a new pipeline having
         // started since, must not paste anything.
@@ -244,8 +264,17 @@ final class DictationCoordinator {
 
     /// Cleanup is best-effort by design: any failure, timeout, or missing key
     /// falls through to the raw transcript rather than losing the dictation.
-    private func cleanIfEnabled(_ text: String) async -> String {
+    ///
+    /// Guards `token` itself before writing `.polishing`: today there is no
+    /// actor hop between the caller's own `isCurrent` check and this call,
+    /// so `abort()` cannot interleave before the write, but that is an
+    /// accident of the current call shape, not a guarantee. If a stale
+    /// pipeline ever reached this write unguarded, it would set `.polishing`
+    /// after `abort()` had already returned the coordinator to `.idle`,
+    /// leaving it permanently busy with no work left to move it out again.
+    private func cleanIfEnabled(_ text: String, token: Int) async -> String {
         guard preferences.cleanupEnabled, let cleaner else { return text }
+        guard isCurrent(token) else { return text }
         state = .polishing
         let prompt = preferences.cleanupPrompt
         let model = preferences.cleanupModelID
