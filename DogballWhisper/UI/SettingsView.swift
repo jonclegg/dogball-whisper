@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 struct SettingsView: View {
@@ -125,6 +127,16 @@ private struct CleanupSettingsTab: View {
     @State private var testResult: String?
     @State private var isTesting = false
     @State private var isCustomModel = false
+    /// What the Keychain holds, as of the last time this tab read or wrote
+    /// it. `apiKey` is compared against this rather than written blindly, for
+    /// the same reason the other three fields compare against `preferences`:
+    /// `onAppear` seeding the field is itself a change and would otherwise
+    /// fire the handler.
+    @State private var storedAPIKey = ""
+    /// The debounced write. Typing a 73-character key would otherwise be 73
+    /// Keychain delete-plus-adds, so the write waits for a pause; closing the
+    /// window or pressing return flushes it early.
+    @State private var apiKeyCommit: Task<Void, Never>?
 
     /// Fast, inexpensive models suited to a short rewrite. Not exhaustive on
     /// purpose — OpenRouter carries hundreds, and the custom field is there
@@ -221,7 +233,8 @@ private struct CleanupSettingsTab: View {
             // showing a different model as selected.
             isCustomModel = !Self.suggestedModels.contains(modelID)
             prompt = preferences.cleanupPrompt
-            apiKey = KeychainStore.read() ?? ""
+            storedAPIKey = KeychainStore.read() ?? ""
+            apiKey = storedAPIKey
         }
         // Each of these writes only a genuine change. `onAppear` loads the
         // current values into `@State`, which is itself a change from the
@@ -241,7 +254,33 @@ private struct CleanupSettingsTab: View {
             guard new != preferences.cleanupPrompt else { return }
             preferences.cleanupPrompt = new
         }
-        .onChange(of: apiKey) { _, new in KeychainStore.save(new) }
+        // Emptying the field revokes the key. It is the only way to stop
+        // sending dictated text to a third party from inside the app, so it
+        // has to be a deletion rather than a save the Keychain layer ignores.
+        .onChange(of: apiKey) { _, _ in
+            apiKeyCommit?.cancel()
+            apiKeyCommit = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled else { return }
+                commitAPIKey()
+            }
+        }
+        .onSubmit { commitAPIKey() }
+        // The settings window keeps this view alive when it closes, so
+        // `onDisappear` never runs (the same behavior `OnboardingWindowController`
+        // documents). Without this, a key pasted and then immediately ⌘W'd
+        // away would be lost inside the debounce window.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
+            commitAPIKey()
+        }
+    }
+
+    private func commitAPIKey() {
+        apiKeyCommit?.cancel()
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != storedAPIKey else { return }
+        KeychainStore.setKey(fromField: trimmed)
+        storedAPIKey = trimmed
     }
 
     private func runTest() {

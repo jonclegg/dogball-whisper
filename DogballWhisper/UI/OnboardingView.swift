@@ -185,7 +185,10 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Start dictating") {
-                    KeychainStore.save(apiKey)
+                    // Same rule as the settings tab: the field is prefilled
+                    // from the Keychain, so leaving it empty is a decision to
+                    // have no key rather than an accident.
+                    KeychainStore.setKey(fromField: apiKey)
                     onFinished()
                 }
                 .keyboardShortcut(.defaultAction)
