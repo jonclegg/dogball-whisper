@@ -3,7 +3,9 @@ import CoreGraphics
 /// Pure geometry, so the awkward part (AX reports top-left origins, Cocoa uses
 /// bottom-left) is covered by tests instead of guesswork on screen.
 enum PanelPositioner {
-    static let panelSize = CGSize(width: 220, height: 56)
+    /// A compact pill rather than a card. Wide enough for "Copied to clipboard"
+    /// at 11pt and for the level bars, and no wider.
+    static let panelSize = CGSize(width: 148, height: 34)
     static let caretGap: CGFloat = 10
     static let edgeInset: CGFloat = 8
     static let bottomInset: CGFloat = 120

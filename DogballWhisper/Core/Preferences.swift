@@ -22,9 +22,19 @@ final class Preferences {
 
     static let defaultCleanupPrompt = """
         Clean up this dictated text. Remove filler words (um, uh, like, you know), \
-        false starts, stutters, and repeated words. Fix punctuation and capitalization. \
-        Do not rephrase, reorder, summarize, or add anything. Keep the speaker's exact \
-        wording and voice otherwise. Return only the cleaned text.
+        false starts, stutters, and repeated words. Fix punctuation and capitalization.
+
+        The speaker is a software developer, and speech recognition regularly \
+        mishears technical vocabulary as ordinary English. When a word only makes \
+        sense as a mistranscription, replace it with the term a developer plainly \
+        meant. For example "merge it to Maine" is "merge it to main", "guess pull" \
+        is "git pull", "pull request" may arrive as "pole request", and repo, \
+        commit, branch, rebase, async, API, JSON, Swift, and macOS are frequently \
+        garbled. Only make the substitution when the developer reading is clearly \
+        the intended one, and leave the word alone when it is genuinely ambiguous.
+
+        Otherwise do not rephrase, reorder, summarize, or add anything. Keep the \
+        speaker's exact wording and voice. Return only the cleaned text.
         """
 
     private let defaults: UserDefaults

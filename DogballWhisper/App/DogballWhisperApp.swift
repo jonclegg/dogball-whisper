@@ -44,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.coordinator = coordinator
 
+        installEditMenu()
+
         let menuBar = MenuBarController(
             onOpenSettings: { [weak self] in self?.showSettings() },
             onFinishSetup: { [weak self] in self?.showOnboarding() }
@@ -130,6 +132,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.observeActiveModel()
             }
         }
+    }
+
+    /// An accessory app has no menu bar of its own, and macOS routes ⌘X/⌘C/⌘V
+    /// through a menu's key equivalents — so without this, paste simply does
+    /// nothing in every text field the app shows, including the API key fields
+    /// in onboarding and settings. The menu is never drawn anywhere; it exists
+    /// purely so the standard editing shortcuts reach the first responder.
+    private func installEditMenu() {
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(
+            withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(
+            withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(
+            withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(
+            withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(
+            withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(
+            withTitle: "Select all", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let editItem = NSMenuItem()
+        editItem.submenu = editMenu
+
+        let mainMenu = NSMenu()
+        mainMenu.addItem(editItem)
+        NSApp.mainMenu = mainMenu
     }
 
     func startMonitoring() {

@@ -3,12 +3,14 @@ import XCTest
 
 final class PermissionsTests: XCTestCase {
 
-    // Accessibility is optional: without it we degrade to clipboard-only
-    // insertion rather than refusing to run.
-    func testOnlyMicrophoneAndInputMonitoringAreRequired() {
+    // Accessibility carries both the keyboard event tap and the paste, so it
+    // is required. Input Monitoring is not: a session event tap does not need
+    // it, and macOS will not list an app there until it installs a tap, so
+    // requiring it made first-run setup impossible to complete.
+    func testOnlyMicrophoneAndAccessibilityAreRequired() {
         XCTAssertTrue(PermissionKind.microphone.isRequired)
-        XCTAssertTrue(PermissionKind.inputMonitoring.isRequired)
-        XCTAssertFalse(PermissionKind.accessibility.isRequired)
+        XCTAssertTrue(PermissionKind.accessibility.isRequired)
+        XCTAssertFalse(PermissionKind.inputMonitoring.isRequired)
     }
 
     func testEveryPermissionHasUserFacingCopy() {
@@ -31,10 +33,19 @@ final class PermissionsTests: XCTestCase {
     }
 
     func testSummaryNamesWhatIsStillMissing() {
-        XCTAssertEqual(Permissions.summary(granted: []), "Microphone and Input Monitoring needed")
-        XCTAssertEqual(Permissions.summary(granted: [.microphone]), "Input Monitoring needed")
+        XCTAssertEqual(Permissions.summary(granted: []), "Microphone and Accessibility needed")
+        XCTAssertEqual(Permissions.summary(granted: [.microphone]), "Accessibility needed")
         XCTAssertEqual(
-            Permissions.summary(granted: [.microphone, .inputMonitoring]),
+            Permissions.summary(granted: [.microphone, .accessibility]),
+            "Ready")
+    }
+
+    // Input Monitoring must never hold setup back, however it is toggled.
+    func testInputMonitoringNeverBlocksReadiness() {
+        XCTAssertEqual(
+            Permissions.summary(granted: [.microphone, .accessibility]), "Ready")
+        XCTAssertEqual(
+            Permissions.summary(granted: [.microphone, .accessibility, .inputMonitoring]),
             "Ready")
     }
 

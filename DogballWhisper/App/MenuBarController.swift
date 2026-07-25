@@ -62,7 +62,7 @@ final class MenuBarController: NSObject {
         }
         statusItem.button?.image = NSImage(
             systemSymbolName: symbol, accessibilityDescription: "Dogball Whisper")
-        statusItem.button?.contentTintColor = state == .recording ? .systemRed : nil
+        statusItem.button?.contentTintColor = state == .recording ? .systemBlue : nil
     }
 
     func setActiveModelName(_ name: String?) {

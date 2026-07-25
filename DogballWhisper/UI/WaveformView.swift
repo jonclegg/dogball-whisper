@@ -4,16 +4,16 @@ import SwiftUI
 struct WaveformView: View {
     let levels: [Float]
 
-    private let barWidth: CGFloat = 3
-    private let spacing: CGFloat = 2
-    private let minHeight: CGFloat = 3
+    private let barWidth: CGFloat = 1.5
+    private let spacing: CGFloat = 1
+    private let minHeight: CGFloat = 2
 
     var body: some View {
         GeometryReader { geometry in
             HStack(alignment: .center, spacing: spacing) {
                 ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
                     Capsule()
-                        .fill(.primary.opacity(0.75))
+                        .fill(Color(nsColor: .systemBlue))
                         .frame(
                             width: barWidth,
                             height: max(minHeight, CGFloat(level) * geometry.size.height)
@@ -36,12 +36,12 @@ struct DictationPanelContent: View {
             switch state {
             case .recording:
                 WaveformView(levels: levels)
-                    .padding(.horizontal, 16)
-                    .frame(height: 28)
+                    .padding(.horizontal, 12)
+                    .frame(height: 16)
             case .transcribing:
-                label("Transcribing…")
+                label("Transcribing…").foregroundStyle(Color(nsColor: .systemBlue))
             case .polishing:
-                label("Polishing…")
+                label("Polishing…").foregroundStyle(Color(nsColor: .systemBlue))
             case let .notice(message):
                 label(message)
             case let .failed(message):
@@ -51,13 +51,15 @@ struct DictationPanelContent: View {
             }
         }
         .frame(width: PanelPositioner.panelSize.width, height: PanelPositioner.panelSize.height)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(.regularMaterial, in: Capsule(style: .continuous))
+        .overlay(Capsule(style: .continuous).strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
     }
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12, weight: .medium))
-            .lineLimit(2)
+            .font(.system(size: 11, weight: .medium))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 12)
     }
