@@ -42,11 +42,24 @@ enum CaretLocator {
             kAXBoundsForRangeParameterizedAttribute as CFString,
             range,
             &boundsRef) == .success,
-            let boundsValue = boundsRef
+            let boundsValue = boundsRef,
+            // The focused element belongs to another process's own AX
+            // implementation, so its response can be malformed. Verify the
+            // CFType before the force cast, same as the AXUIElement check
+            // above: every failure path here must degrade to "no caret",
+            // never trap.
+            CFGetTypeID(boundsValue) == AXValueGetTypeID()
         else { return CaretLocation(rectQuartz: nil, pid: pid) }
 
         var rect = CGRect.zero
-        guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect), rect.width >= 0 else {
+        guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect) else {
+            return CaretLocation(rectQuartz: nil, pid: pid)
+        }
+
+        let isSaneRect = rect.origin.x.isFinite && rect.origin.y.isFinite
+            && rect.size.width.isFinite && rect.size.height.isFinite
+            && rect.width >= 0 && rect.height > 0
+        guard isSaneRect else {
             return CaretLocation(rectQuartz: nil, pid: pid)
         }
         return CaretLocation(rectQuartz: rect, pid: pid)
