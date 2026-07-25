@@ -47,4 +47,10 @@ final class PreferencesTests: XCTestCase {
         prefs.cleanupPrompt = "   "
         XCTAssertEqual(prefs.cleanupPrompt, Preferences.defaultCleanupPrompt)
     }
+
+    func testEmptyCleanupModelIDFallsBackToTheDefault() {
+        let prefs = Preferences(defaults: defaults)
+        prefs.cleanupModelID = "  "
+        XCTAssertEqual(prefs.cleanupModelID, Preferences.defaultCleanupModelID)
+    }
 }

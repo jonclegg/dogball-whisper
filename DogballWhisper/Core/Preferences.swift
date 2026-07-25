@@ -49,22 +49,14 @@ final class Preferences {
     }
 
     var cleanupModelID: String {
-        get {
-            let stored = defaults.string(forKey: Key.cleanupModelID) ?? ""
-            return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? Self.defaultCleanupModelID : stored
-        }
+        get { nonBlank(Key.cleanupModelID, default: Self.defaultCleanupModelID) }
         set { defaults.set(newValue, forKey: Key.cleanupModelID) }
     }
 
     /// Blank prompts would silently turn cleanup into a passthrough, so an
     /// empty value reads back as the default instead.
     var cleanupPrompt: String {
-        get {
-            let stored = defaults.string(forKey: Key.cleanupPrompt) ?? ""
-            return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? Self.defaultCleanupPrompt : stored
-        }
+        get { nonBlank(Key.cleanupPrompt, default: Self.defaultCleanupPrompt) }
         set { defaults.set(newValue, forKey: Key.cleanupPrompt) }
     }
 
@@ -82,5 +74,12 @@ final class Preferences {
     var hotkeyBindingData: Data? {
         get { defaults.data(forKey: Key.hotkeyBinding) }
         set { defaults.set(newValue, forKey: Key.hotkeyBinding) }
+    }
+
+    /// Blank values would silently turn cleanup into a passthrough, so an
+    /// empty or whitespace-only stored value reads back as the default.
+    private func nonBlank(_ key: String, default fallback: String) -> String {
+        let stored = defaults.string(forKey: key) ?? ""
+        return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : stored
     }
 }
