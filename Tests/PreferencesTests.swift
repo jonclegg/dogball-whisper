@@ -61,4 +61,10 @@ final class PreferencesTests: XCTestCase {
         prefs.hotkeyBinding = .fn
         XCTAssertEqual(Preferences(defaults: defaults).hotkeyBinding, .fn)
     }
+
+    func testHotkeyBindingFallsBackToRightOptionWhenStoredDataFailsToDecode() {
+        let prefs = Preferences(defaults: defaults)
+        prefs.hotkeyBindingData = Data("not valid json".utf8)
+        XCTAssertEqual(prefs.hotkeyBinding, .rightOption)
+    }
 }

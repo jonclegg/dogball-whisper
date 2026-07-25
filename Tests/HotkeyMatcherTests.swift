@@ -99,4 +99,53 @@ final class HotkeyMatcherTests: XCTestCase {
         let data = try JSONEncoder().encode(binding)
         XCTAssertEqual(try JSONDecoder().decode(HotkeyBinding.self, from: data), binding)
     }
+
+    // Switching bindings mid-hold (e.g. the user changes it in settings)
+    // must not leave a dictation stuck open forever: it should cancel, and
+    // the new binding must work cleanly afterward.
+    func testRebindWhileEngagedCancelsAndAppliesCleanly() {
+        var matcher = HotkeyMatcher(binding: .rightOption)
+        XCTAssertEqual(matcher.handle(.flagsChanged(keyCode: 61, flags: [.maskAlternate])), .began)
+
+        XCTAssertEqual(matcher.rebind(to: .fn), .cancelled)
+        XCTAssertFalse(matcher.isEngaged)
+
+        XCTAssertEqual(matcher.handle(.flagsChanged(keyCode: 63, flags: [.maskSecondaryFn])), .began)
+    }
+
+    func testRebindWhileNotEngagedReportsNothing() {
+        var matcher = HotkeyMatcher(binding: .rightOption)
+        XCTAssertNil(matcher.rebind(to: .fn))
+        XCTAssertFalse(matcher.isEngaged)
+    }
+
+    // Same rule as modifier-only bindings: any other key pressed while a
+    // combo is held abandons the dictation rather than leaving it stuck.
+    func testUnrelatedKeyWhileComboEngagedCancels() {
+        var matcher = HotkeyMatcher(
+            binding: HotkeyBinding(comboKeyCode: 49, modifiers: [.maskAlternate])
+        )
+        XCTAssertEqual(matcher.handle(.keyDown(keyCode: 49, flags: [.maskAlternate])), .began)
+        XCTAssertEqual(matcher.handle(.keyDown(keyCode: 14, flags: [.maskAlternate])), .cancelled)
+        XCTAssertFalse(matcher.isEngaged)
+    }
+
+    // Repeats of the held combo key itself must not be mistaken for an
+    // unrelated key and cancel the dictation.
+    func testRepeatOfTheComboKeyDoesNotCancel() {
+        var matcher = HotkeyMatcher(
+            binding: HotkeyBinding(comboKeyCode: 49, modifiers: [.maskAlternate])
+        )
+        XCTAssertEqual(matcher.handle(.keyDown(keyCode: 49, flags: [.maskAlternate])), .began)
+        XCTAssertNil(matcher.handle(.keyDown(keyCode: 49, flags: [.maskAlternate])))
+        XCTAssertTrue(matcher.isEngaged)
+    }
+
+    // A combo with no modifiers can never be reliably ended (releasing "no
+    // modifiers" is a no-op), so it must never be allowed to engage.
+    func testComboWithEmptyModifiersNeverEngages() {
+        var matcher = HotkeyMatcher(binding: HotkeyBinding(comboKeyCode: 49, modifiers: []))
+        XCTAssertNil(matcher.handle(.keyDown(keyCode: 49, flags: [])))
+        XCTAssertFalse(matcher.isEngaged)
+    }
 }

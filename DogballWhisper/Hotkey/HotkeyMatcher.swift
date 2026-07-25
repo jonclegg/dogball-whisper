@@ -31,6 +31,18 @@ struct HotkeyMatcher {
         binding.isModifierOnly ? handleModifierOnly(input) : handleCombo(input)
     }
 
+    /// Switches to a new binding, e.g. because the user changed it in
+    /// settings mid-hold. If a dictation was already in flight under the old
+    /// binding, it can never be paired with a matching release once the
+    /// binding changes underneath it, so this reports it as cancelled before
+    /// applying the new binding.
+    mutating func rebind(to newBinding: HotkeyBinding) -> HotkeySignal? {
+        let signal: HotkeySignal? = isEngaged ? .cancelled : nil
+        isEngaged = false
+        binding = newBinding
+        return signal
+    }
+
     /// Combo bindings must be swallowed by the tap so the focused app never
     /// receives the keystroke. Modifier-only bindings are always passed
     /// through, since swallowing them would break the modifier itself.
@@ -80,7 +92,18 @@ struct HotkeyMatcher {
     private mutating func handleCombo(_ input: HotkeyInput) -> HotkeySignal? {
         switch input {
         case let .keyDown(keyCode, rawFlags):
-            guard !isEngaged,
+            if isEngaged {
+                // The held key repeats via keyDown; ignore those. Any other
+                // key means the user is typing something else and abandons
+                // the dictation, same rule as modifier-only bindings.
+                guard keyCode != binding.keyCode else { return nil }
+                isEngaged = false
+                return .cancelled
+            }
+            // A bare key with no modifiers is not a usable global hotkey:
+            // "!contains(modifiers)" below would never be true for an empty
+            // set, so such a combo could engage but never end.
+            guard !binding.modifiers.isEmpty,
                   keyCode == binding.keyCode,
                   Self.filtered(rawFlags) == binding.modifiers
             else { return nil }

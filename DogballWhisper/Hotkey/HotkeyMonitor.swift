@@ -13,7 +13,16 @@ enum HotkeyMonitorError: LocalizedError {
 /// all decisions live in the matcher, which is testable.
 final class HotkeyMonitor {
     var binding: HotkeyBinding {
-        didSet { matcher.binding = binding }
+        didSet {
+            // If a dictation was in flight under the old binding, it can
+            // never be paired with a release once the binding underneath it
+            // changes, so report it as cancelled through the same path as
+            // tap-driven signals.
+            if let signal = matcher.rebind(to: binding) {
+                let callback = onSignal
+                DispatchQueue.main.async { callback(signal) }
+            }
+        }
     }
 
     /// Called when escape is pressed, so the coordinator can abandon work that
@@ -31,6 +40,14 @@ final class HotkeyMonitor {
         self.binding = binding
         self.matcher = HotkeyMatcher(binding: binding)
         self.onSignal = onSignal
+    }
+
+    deinit {
+        // The tap callback holds an unretained pointer to self; if an owner
+        // drops the monitor without calling stop(), the run-loop source
+        // would outlive it and the next event would dereference a dangling
+        // pointer.
+        stop()
     }
 
     func start() throws {
