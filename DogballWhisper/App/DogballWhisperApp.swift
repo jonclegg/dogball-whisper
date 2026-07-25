@@ -13,24 +13,16 @@ enum DogballWhisperMain {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let preferences = Preferences()
+    private lazy var models = ModelManager(preferences: preferences)
+
     private var menuBar: MenuBarController?
+    private var panel: DictationPanelController?
     private var coordinator: DictationCoordinator?
     private var monitor: HotkeyMonitor?
-    private var panel: DictationPanelController?
-    private let preferences: Preferences
-    let models: ModelManager
-
-    override init() {
-        let preferences = Preferences()
-        self.preferences = preferences
-        self.models = ModelManager(preferences: preferences)
-        super.init()
-    }
+    private var settings: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let menuBar = MenuBarController()
-        self.menuBar = menuBar
-
         let panel = DictationPanelController()
         self.panel = panel
 
@@ -46,23 +38,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             presenter: panel,
             preferences: preferences
         )
-        coordinator.onStateChange = { [weak menuBar] state in
-            menuBar?.update(state: state)
-        }
         self.coordinator = coordinator
+
+        let menuBar = MenuBarController(onOpenSettings: { [weak self] in self?.showSettings() })
+        menuBar.setActiveModelName(
+            preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
+        self.menuBar = menuBar
+        coordinator.onStateChange = { [weak menuBar] state in menuBar?.update(state: state) }
 
         let monitor = HotkeyMonitor(binding: preferences.hotkeyBinding) { signal in
             MainActor.assumeIsolated { coordinator.handle(signal) }
         }
         monitor.onEscape = { MainActor.assumeIsolated { coordinator.abort() } }
         self.monitor = monitor
+
+        // Task 12 puts onboarding in front of this.
+        startMonitoring()
+        Task {
+            await models.loadActiveEngine()
+            menuBar.setActiveModelName(
+                preferences.activeModelID.flatMap { ModelCatalog.descriptor(id: $0)?.name })
+        }
+    }
+
+    func startMonitoring() {
         do {
-            try monitor.start()
+            try monitor?.start()
         } catch {
             NSLog("Hotkey monitor failed: \(error.localizedDescription)")
         }
-
-        // Load the active model up front so the first dictation is not slow.
-        Task { await models.loadActiveEngine() }
     }
+
+    private func showSettings() {
+        if settings == nil {
+            settings = SettingsWindowController(
+                preferences: preferences,
+                models: models,
+                onHotkeyChange: { [weak self] binding in self?.monitor?.binding = binding }
+            )
+        }
+        settings?.show()
+    }
+
 }
