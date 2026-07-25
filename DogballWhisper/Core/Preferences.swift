@@ -1,0 +1,86 @@
+import Foundation
+
+enum InsertionMode: String, Codable {
+    case paste
+    case clipboardOnly
+}
+
+/// Typed wrapper over UserDefaults. Everything the user can configure except
+/// the OpenRouter key, which lives in the Keychain.
+final class Preferences {
+    private enum Key {
+        static let hotkeyBinding = "hotkeyBinding"
+        static let activeModelID = "activeModelID"
+        static let cleanupEnabled = "cleanupEnabled"
+        static let cleanupModelID = "cleanupModelID"
+        static let cleanupPrompt = "cleanupPrompt"
+        static let insertionMode = "insertionMode"
+        static let hasCompletedOnboarding = "hasCompletedOnboarding"
+    }
+
+    static let defaultCleanupModelID = "anthropic/claude-haiku-4.5"
+
+    static let defaultCleanupPrompt = """
+        Clean up this dictated text. Remove filler words (um, uh, like, you know), \
+        false starts, stutters, and repeated words. Fix punctuation and capitalization. \
+        Do not rephrase, reorder, summarize, or add anything. Keep the speaker's exact \
+        wording and voice otherwise. Return only the cleaned text.
+        """
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        defaults.register(defaults: [
+            Key.cleanupEnabled: true,
+            Key.cleanupModelID: Self.defaultCleanupModelID,
+            Key.insertionMode: InsertionMode.paste.rawValue,
+        ])
+    }
+
+    var activeModelID: String? {
+        get { defaults.string(forKey: Key.activeModelID) }
+        set { defaults.set(newValue, forKey: Key.activeModelID) }
+    }
+
+    var cleanupEnabled: Bool {
+        get { defaults.bool(forKey: Key.cleanupEnabled) }
+        set { defaults.set(newValue, forKey: Key.cleanupEnabled) }
+    }
+
+    var cleanupModelID: String {
+        get {
+            let stored = defaults.string(forKey: Key.cleanupModelID) ?? ""
+            return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? Self.defaultCleanupModelID : stored
+        }
+        set { defaults.set(newValue, forKey: Key.cleanupModelID) }
+    }
+
+    /// Blank prompts would silently turn cleanup into a passthrough, so an
+    /// empty value reads back as the default instead.
+    var cleanupPrompt: String {
+        get {
+            let stored = defaults.string(forKey: Key.cleanupPrompt) ?? ""
+            return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? Self.defaultCleanupPrompt : stored
+        }
+        set { defaults.set(newValue, forKey: Key.cleanupPrompt) }
+    }
+
+    var insertionMode: InsertionMode {
+        get { InsertionMode(rawValue: defaults.string(forKey: Key.insertionMode) ?? "") ?? .paste }
+        set { defaults.set(newValue.rawValue, forKey: Key.insertionMode) }
+    }
+
+    var hasCompletedOnboarding: Bool {
+        get { defaults.bool(forKey: Key.hasCompletedOnboarding) }
+        set { defaults.set(newValue, forKey: Key.hasCompletedOnboarding) }
+    }
+
+    /// Raw storage for the hotkey binding; Task 3 encodes/decodes it.
+    var hotkeyBindingData: Data? {
+        get { defaults.data(forKey: Key.hotkeyBinding) }
+        set { defaults.set(newValue, forKey: Key.hotkeyBinding) }
+    }
+}
