@@ -3,3 +3,5 @@ build/
 *.xcodeproj
 .claude/worktrees/
 .swiftpm/
+DerivedData/
+*.xcuserstate

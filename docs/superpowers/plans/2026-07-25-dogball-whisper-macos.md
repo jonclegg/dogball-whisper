@@ -241,7 +241,11 @@ echo "Installed /Applications/Dogball Whisper.app"
 
 codesign --verify --strict "/Applications/Dogball Whisper.app"
 
-$LAUNCH && open "/Applications/Dogball Whisper.app"
+# An `$LAUNCH && open ...` one-liner here would make the no-flag invocation
+# exit 1, because `false` would be the last command the script ran.
+if [[ "$LAUNCH" == true ]]; then
+  open "/Applications/Dogball Whisper.app"
+fi
 ```
 
 `scripts/test.sh`:
@@ -324,7 +328,7 @@ git commit -m "feat: menu-bar app skeleton with headless build script"
 - Produces:
   - `final class Preferences` with `init(defaults: UserDefaults = .standard)` and mutable properties `hotkeyBinding: HotkeyBinding` (defined in Task 3 — until then, store `Data`), `activeModelID: String?`, `cleanupEnabled: Bool`, `cleanupModelID: String`, `cleanupPrompt: String`, `insertionMode: InsertionMode`, `hasCompletedOnboarding: Bool`. Static `Preferences.defaultCleanupPrompt: String` and `Preferences.defaultCleanupModelID: String`.
   - `enum InsertionMode: String, Codable { case paste, clipboardOnly }`
-  - `enum KeychainStore` with `static func save(_ key: String) throws`, `static func read() -> String?`, `static func delete()`.
+  - `enum KeychainStore` with `@discardableResult static func save(_ key: String) -> Bool`, `static func read() -> String?`, `@discardableResult static func delete() -> Bool`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1303,14 +1307,15 @@ In `project.yml`, under the app target's `sources`, the whole `DogballWhisper` d
         buildPhase: resources
 ```
 
-Record the fixture (say the words "hello there" clearly):
+Synthesize the fixture with macOS's own speech synthesizer. This needs no
+microphone, so it works headlessly and gives every run byte-identical audio:
 
 ```bash
 mkdir -p Tests/Fixtures
-# Record ~2 seconds of speech at 16kHz mono:
-sox -d -r 16000 -c 1 -b 16 Tests/Fixtures/hello.wav trim 0 2
-# If sox is unavailable: use QuickTime Player > New Audio Recording, then
-# afconvert -f WAVE -d LEI16@16000 -c 1 input.m4a Tests/Fixtures/hello.wav
+say -v Samantha -o /tmp/hello.aiff "Hello there, this is a test of the dictation engine."
+afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/hello.aiff Tests/Fixtures/hello.wav
+rm /tmp/hello.aiff
+afinfo Tests/Fixtures/hello.wav   # confirm 16000 Hz, 1 channel, 16-bit
 ```
 
 - [ ] **Step 3: Add the mirror tests**
@@ -3606,16 +3611,18 @@ git commit -m "feat: model catalog, installer, and whisperkit engine"
 
 ---
 
-### Task 11: Settings window, hotkey picker, launch at login, and menu
+### Task 11: Settings window, hotkey picker, permissions, launch at login, and menu
 
 **Files:**
-- Create: `DogballWhisper/App/LoginItem.swift`, `DogballWhisper/UI/SettingsView.swift`, `DogballWhisper/UI/ShortcutRecorderView.swift`, `DogballWhisper/UI/SettingsWindowController.swift`
+- Create: `DogballWhisper/App/LoginItem.swift`, `DogballWhisper/Core/Permissions.swift`, `DogballWhisper/UI/SettingsView.swift`, `DogballWhisper/UI/ShortcutRecorderView.swift`, `DogballWhisper/UI/SettingsWindowController.swift`
+- Test: `Tests/PermissionsTests.swift`
 - Modify: `DogballWhisper/App/MenuBarController.swift`, `DogballWhisper/App/DogballWhisperApp.swift`
 
 **Interfaces:**
 - Consumes: `Preferences`, `ModelManager`, `ModelCatalog`, `KeychainStore`, `PolishService`, `HotkeyBinding`.
 - Produces:
   - `enum LoginItem` with `static var isEnabled: Bool`, `static func setEnabled(_ enabled: Bool)`.
+  - `enum PermissionKind: String, CaseIterable { case microphone, inputMonitoring, accessibility }` with `title`, `explanation`, `isRequired`; and `enum Permissions` with `isGranted(_:)`, `request(_:) async`, `settingsURL(for:)`, `openSettings(for:)`, `openKeyboardSettings()`, `allRequiredGranted`, `summary(granted:)`, `fnUsageIsClaimed(_:)`, `fnKeyIsClaimedBySystem`. The settings view's fn-key warning depends on the last two, which is why this unit lands here rather than with onboarding.
   - `@MainActor final class SettingsWindowController` with `init(preferences:models:onHotkeyChange:)` and `func show()`.
   - `struct SettingsView: View`, `struct ShortcutRecorderView: View` with `init(binding: Binding<HotkeyBinding>)`.
   - `MenuBarController.init(onOpenSettings: @escaping () -> Void)`, `func update(state: DictationState)`, `func setActiveModelName(_ name: String?)`.
@@ -3651,7 +3658,183 @@ enum LoginItem {
 
 There is no unit test: `SMAppService` mutates real system state and reports `.requiresApproval` from an unsigned test host. It is covered by the reboot check in the smoke pass.
 
-- [ ] **Step 2: Implement the shortcut recorder**
+- [ ] **Step 2: Write the failing tests**
+
+`Tests/PermissionsTests.swift`:
+
+```swift
+import XCTest
+@testable import DogballWhisper
+
+final class PermissionsTests: XCTestCase {
+
+    // Accessibility is optional: without it we degrade to clipboard-only
+    // insertion rather than refusing to run.
+    func testOnlyMicrophoneAndInputMonitoringAreRequired() {
+        XCTAssertTrue(PermissionKind.microphone.isRequired)
+        XCTAssertTrue(PermissionKind.inputMonitoring.isRequired)
+        XCTAssertFalse(PermissionKind.accessibility.isRequired)
+    }
+
+    func testEveryPermissionHasUserFacingCopy() {
+        for kind in PermissionKind.allCases {
+            XCTAssertFalse(kind.title.isEmpty)
+            XCTAssertFalse(kind.explanation.isEmpty)
+        }
+    }
+
+    func testSettingsDeepLinksPointAtThePrivacyPanes() {
+        XCTAssertTrue(
+            Permissions.settingsURL(for: .inputMonitoring).absoluteString
+                .contains("Privacy_ListenEvent"))
+        XCTAssertTrue(
+            Permissions.settingsURL(for: .accessibility).absoluteString
+                .contains("Privacy_Accessibility"))
+        XCTAssertTrue(
+            Permissions.settingsURL(for: .microphone).absoluteString
+                .contains("Privacy_Microphone"))
+    }
+
+    func testSummaryNamesWhatIsStillMissing() {
+        XCTAssertEqual(Permissions.summary(granted: []), "Microphone and Input Monitoring needed")
+        XCTAssertEqual(Permissions.summary(granted: [.microphone]), "Input Monitoring needed")
+        XCTAssertEqual(
+            Permissions.summary(granted: [.microphone, .inputMonitoring]),
+            "Ready")
+    }
+
+    // 0 means "Do Nothing", which is the only value that leaves fn to us.
+    func testFnUsageValuesOtherThanDoNothingCountAsClaimed() {
+        XCTAssertFalse(Permissions.fnUsageIsClaimed(0))
+        XCTAssertTrue(Permissions.fnUsageIsClaimed(1))
+        XCTAssertTrue(Permissions.fnUsageIsClaimed(2))
+        XCTAssertTrue(Permissions.fnUsageIsClaimed(3))
+    }
+}
+```
+
+- [ ] **Step 3: Run the tests to verify they fail**
+
+Run: `./scripts/test.sh DogballWhisperTests/PermissionsTests`
+Expected: FAIL — "cannot find 'PermissionKind' in scope".
+
+- [ ] **Step 4: Implement `Permissions`**
+
+`DogballWhisper/Core/Permissions.swift`:
+
+```swift
+import AVFoundation
+import AppKit
+import ApplicationServices
+
+enum PermissionKind: String, CaseIterable {
+    case microphone
+    case inputMonitoring
+    case accessibility
+
+    var title: String {
+        switch self {
+        case .microphone: return "Microphone"
+        case .inputMonitoring: return "Input Monitoring"
+        case .accessibility: return "Accessibility"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .microphone:
+            return "Records your voice while you hold the dictation key. Audio stays on this Mac."
+        case .inputMonitoring:
+            return "Notices when you hold the dictation key, in any app."
+        case .accessibility:
+            return "Finds your text cursor and pastes the finished text. Without it, text is copied to the clipboard instead."
+        }
+    }
+
+    /// Accessibility is optional: the app degrades to clipboard-only insertion.
+    var isRequired: Bool {
+        self != .accessibility
+    }
+}
+
+enum Permissions {
+    static func isGranted(_ kind: PermissionKind) -> Bool {
+        switch kind {
+        case .microphone:
+            return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        case .inputMonitoring:
+            return CGPreflightListenEventAccess()
+        case .accessibility:
+            return AXIsProcessTrusted()
+        }
+    }
+
+    static var allRequiredGranted: Bool {
+        PermissionKind.allCases.filter(\.isRequired).allSatisfy(isGranted)
+    }
+
+    /// Only microphone and accessibility can be prompted for. Input Monitoring
+    /// has no request API that returns a result, so its row deep-links to
+    /// System Settings and the UI polls until it flips.
+    static func request(_ kind: PermissionKind) async {
+        switch kind {
+        case .microphone:
+            _ = await AudioRecorder.requestPermission()
+        case .inputMonitoring:
+            _ = CGRequestListenEventAccess()
+        case .accessibility:
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+            _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        }
+    }
+
+    static func settingsURL(for kind: PermissionKind) -> URL {
+        let anchor: String
+        switch kind {
+        case .microphone: anchor = "Privacy_Microphone"
+        case .inputMonitoring: anchor = "Privacy_ListenEvent"
+        case .accessibility: anchor = "Privacy_Accessibility"
+        }
+        return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!
+    }
+
+    static func openSettings(for kind: PermissionKind) {
+        NSWorkspace.shared.open(settingsURL(for: kind))
+    }
+
+    static func openKeyboardSettings() {
+        NSWorkspace.shared.open(
+            URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
+    }
+
+    static func summary(granted: Set<PermissionKind>) -> String {
+        let missing = PermissionKind.allCases
+            .filter { $0.isRequired && !granted.contains($0) }
+            .map(\.title)
+        guard !missing.isEmpty else { return "Ready" }
+        return missing.joined(separator: " and ") + " needed"
+    }
+
+    /// System Settings > Keyboard > "Press 🌐 to". Anything but 0 (Do Nothing)
+    /// means macOS consumes the fn key before we see it.
+    static func fnUsageIsClaimed(_ value: Int) -> Bool {
+        value != 0
+    }
+
+    static var fnKeyIsClaimedBySystem: Bool {
+        let value = UserDefaults(suiteName: "com.apple.HIToolbox")?
+            .integer(forKey: "AppleFnUsageType") ?? 0
+        return fnUsageIsClaimed(value)
+    }
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `./scripts/test.sh DogballWhisperTests/PermissionsTests`
+Expected: PASS (all five).
+
+- [ ] **Step 6: Implement the shortcut recorder**
 
 `DogballWhisper/UI/ShortcutRecorderView.swift`:
 
@@ -3700,7 +3883,7 @@ struct ShortcutRecorderView: View {
 }
 ```
 
-- [ ] **Step 3: Implement the settings view**
+- [ ] **Step 7: Implement the settings view**
 
 `DogballWhisper/UI/SettingsView.swift`:
 
@@ -3920,7 +4103,7 @@ private struct CleanupSettingsTab: View {
 }
 ```
 
-- [ ] **Step 4: Implement the settings window controller**
+- [ ] **Step 8: Implement the settings window controller**
 
 `DogballWhisper/UI/SettingsWindowController.swift`:
 
@@ -3969,7 +4152,7 @@ final class SettingsWindowController {
 }
 ```
 
-- [ ] **Step 5: Rebuild the menu**
+- [ ] **Step 9: Rebuild the menu**
 
 Replace `DogballWhisper/App/MenuBarController.swift`:
 
@@ -4043,7 +4226,7 @@ final class MenuBarController: NSObject {
 }
 ```
 
-- [ ] **Step 6: Assemble the final `AppDelegate`**
+- [ ] **Step 10: Assemble the final `AppDelegate`**
 
 Replace the whole of `DogballWhisper/App/DogballWhisperApp.swift`:
 
@@ -4135,13 +4318,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 This task ends with a compiling, runnable app: settings reachable from the menu, hotkey rebindable, models installable. Onboarding wraps the launch path in Task 12.
 
-- [ ] **Step 7: Build and check the settings UI**
+- [ ] **Step 11: Build and check the settings UI**
 
 Run: `./scripts/test.sh && ./scripts/build-mac.sh --launch`
 
 Expected: PASS, then the menu has Settings…, Launch at login, and Quit. In Settings: the hotkey picker switches bindings and dictation follows the change with no relaunch; the Models tab installs Whisper Base with live progress and "Use" switches the active model; the Cleanup tab stores a key and the Test button returns cleaned sample text.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add DogballWhisper/UI DogballWhisper/App
@@ -4150,196 +4333,18 @@ git commit -m "feat: settings window, launch at login, and menu"
 
 ---
 
-### Task 12: Permissions and onboarding
+### Task 12: Onboarding
 
 **Files:**
-- Create: `DogballWhisper/Core/Permissions.swift`, `DogballWhisper/UI/OnboardingView.swift`, `Tests/PermissionsTests.swift`
+- Create: `DogballWhisper/UI/OnboardingView.swift`
 - Modify: `DogballWhisper/App/DogballWhisperApp.swift`
 
 **Interfaces:**
-- Consumes: `Preferences`, `ModelManager`, `ModelCatalog`, `AudioRecorder.requestPermission()`.
+- Consumes: `Preferences`, `ModelManager`, `ModelCatalog`, `AudioRecorder.requestPermission()`, and the `Permissions`/`PermissionKind` unit built in Task 11.
 - Produces:
-  - `enum PermissionKind: String, CaseIterable { case microphone, inputMonitoring, accessibility }` with `var title: String`, `var explanation: String`, `var isRequired: Bool`.
-  - `enum Permissions` with `static func isGranted(_: PermissionKind) -> Bool`, `static func request(_: PermissionKind) async`, `static func openSettings(for: PermissionKind)`, `static func openKeyboardSettings()`, `static var allRequiredGranted: Bool`, `static var fnKeyIsClaimedBySystem: Bool`, `static func summary(granted:) -> String`.
   - `@MainActor final class OnboardingWindowController` with `init(preferences:models:onFinished:)` and `func show()`.
 
-- [ ] **Step 1: Write the failing tests**
-
-`Tests/PermissionsTests.swift`:
-
-```swift
-import XCTest
-@testable import DogballWhisper
-
-final class PermissionsTests: XCTestCase {
-
-    // Accessibility is optional: without it we degrade to clipboard-only
-    // insertion rather than refusing to run.
-    func testOnlyMicrophoneAndInputMonitoringAreRequired() {
-        XCTAssertTrue(PermissionKind.microphone.isRequired)
-        XCTAssertTrue(PermissionKind.inputMonitoring.isRequired)
-        XCTAssertFalse(PermissionKind.accessibility.isRequired)
-    }
-
-    func testEveryPermissionHasUserFacingCopy() {
-        for kind in PermissionKind.allCases {
-            XCTAssertFalse(kind.title.isEmpty)
-            XCTAssertFalse(kind.explanation.isEmpty)
-        }
-    }
-
-    func testSettingsDeepLinksPointAtThePrivacyPanes() {
-        XCTAssertTrue(
-            Permissions.settingsURL(for: .inputMonitoring).absoluteString
-                .contains("Privacy_ListenEvent"))
-        XCTAssertTrue(
-            Permissions.settingsURL(for: .accessibility).absoluteString
-                .contains("Privacy_Accessibility"))
-        XCTAssertTrue(
-            Permissions.settingsURL(for: .microphone).absoluteString
-                .contains("Privacy_Microphone"))
-    }
-
-    func testSummaryNamesWhatIsStillMissing() {
-        XCTAssertEqual(Permissions.summary(granted: []), "Microphone and Input Monitoring needed")
-        XCTAssertEqual(Permissions.summary(granted: [.microphone]), "Input Monitoring needed")
-        XCTAssertEqual(
-            Permissions.summary(granted: [.microphone, .inputMonitoring]),
-            "Ready")
-    }
-
-    // 0 means "Do Nothing", which is the only value that leaves fn to us.
-    func testFnUsageValuesOtherThanDoNothingCountAsClaimed() {
-        XCTAssertFalse(Permissions.fnUsageIsClaimed(0))
-        XCTAssertTrue(Permissions.fnUsageIsClaimed(1))
-        XCTAssertTrue(Permissions.fnUsageIsClaimed(2))
-        XCTAssertTrue(Permissions.fnUsageIsClaimed(3))
-    }
-}
-```
-
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `./scripts/test.sh DogballWhisperTests/PermissionsTests`
-Expected: FAIL — "cannot find 'PermissionKind' in scope".
-
-- [ ] **Step 3: Implement `Permissions`**
-
-`DogballWhisper/Core/Permissions.swift`:
-
-```swift
-import AVFoundation
-import AppKit
-import ApplicationServices
-
-enum PermissionKind: String, CaseIterable {
-    case microphone
-    case inputMonitoring
-    case accessibility
-
-    var title: String {
-        switch self {
-        case .microphone: return "Microphone"
-        case .inputMonitoring: return "Input Monitoring"
-        case .accessibility: return "Accessibility"
-        }
-    }
-
-    var explanation: String {
-        switch self {
-        case .microphone:
-            return "Records your voice while you hold the dictation key. Audio stays on this Mac."
-        case .inputMonitoring:
-            return "Notices when you hold the dictation key, in any app."
-        case .accessibility:
-            return "Finds your text cursor and pastes the finished text. Without it, text is copied to the clipboard instead."
-        }
-    }
-
-    /// Accessibility is optional: the app degrades to clipboard-only insertion.
-    var isRequired: Bool {
-        self != .accessibility
-    }
-}
-
-enum Permissions {
-    static func isGranted(_ kind: PermissionKind) -> Bool {
-        switch kind {
-        case .microphone:
-            return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        case .inputMonitoring:
-            return CGPreflightListenEventAccess()
-        case .accessibility:
-            return AXIsProcessTrusted()
-        }
-    }
-
-    static var allRequiredGranted: Bool {
-        PermissionKind.allCases.filter(\.isRequired).allSatisfy(isGranted)
-    }
-
-    /// Only microphone and accessibility can be prompted for. Input Monitoring
-    /// has no request API that returns a result, so its row deep-links to
-    /// System Settings and the UI polls until it flips.
-    static func request(_ kind: PermissionKind) async {
-        switch kind {
-        case .microphone:
-            _ = await AudioRecorder.requestPermission()
-        case .inputMonitoring:
-            _ = CGRequestListenEventAccess()
-        case .accessibility:
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-            _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
-        }
-    }
-
-    static func settingsURL(for kind: PermissionKind) -> URL {
-        let anchor: String
-        switch kind {
-        case .microphone: anchor = "Privacy_Microphone"
-        case .inputMonitoring: anchor = "Privacy_ListenEvent"
-        case .accessibility: anchor = "Privacy_Accessibility"
-        }
-        return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!
-    }
-
-    static func openSettings(for kind: PermissionKind) {
-        NSWorkspace.shared.open(settingsURL(for: kind))
-    }
-
-    static func openKeyboardSettings() {
-        NSWorkspace.shared.open(
-            URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
-    }
-
-    static func summary(granted: Set<PermissionKind>) -> String {
-        let missing = PermissionKind.allCases
-            .filter { $0.isRequired && !granted.contains($0) }
-            .map(\.title)
-        guard !missing.isEmpty else { return "Ready" }
-        return missing.joined(separator: " and ") + " needed"
-    }
-
-    /// System Settings > Keyboard > "Press 🌐 to". Anything but 0 (Do Nothing)
-    /// means macOS consumes the fn key before we see it.
-    static func fnUsageIsClaimed(_ value: Int) -> Bool {
-        value != 0
-    }
-
-    static var fnKeyIsClaimedBySystem: Bool {
-        let value = UserDefaults(suiteName: "com.apple.HIToolbox")?
-            .integer(forKey: "AppleFnUsageType") ?? 0
-        return fnUsageIsClaimed(value)
-    }
-}
-```
-
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `./scripts/test.sh DogballWhisperTests/PermissionsTests`
-Expected: PASS (all five).
-
-- [ ] **Step 5: Implement onboarding**
+- [ ] **Step 1: Implement onboarding**
 
 `DogballWhisper/UI/OnboardingView.swift`:
 
@@ -4508,7 +4513,7 @@ struct OnboardingView: View {
 }
 ```
 
-- [ ] **Step 6: Put onboarding in front of the launch path**
+- [ ] **Step 2: Put onboarding in front of the launch path**
 
 In `DogballWhisper/App/DogballWhisperApp.swift`, add `private var onboarding: OnboardingWindowController?` alongside the other stored properties, replace the unconditional startup block at the end of `applicationDidFinishLaunching`:
 
@@ -4546,7 +4551,7 @@ and add:
     }
 ```
 
-- [ ] **Step 7: Build and walk through onboarding**
+- [ ] **Step 3: Build and walk through onboarding**
 
 Run: `./scripts/build-mac.sh --launch`
 
@@ -4558,12 +4563,12 @@ defaults delete com.jonclegg.DogballWhisper hasCompletedOnboarding 2>/dev/null |
 
 Expected: the setup window opens, each permission row flips to a green check as it is granted (Input Monitoring flips within a second of granting it in System Settings, thanks to the poll), the Parakeet download shows real progress, and "Start dictating" enables only when both required permissions are granted and a model is active. Note that granting Input Monitoring makes macOS ask to quit and reopen the app; that is normal, and the event tap only works after the relaunch.
 
-- [ ] **Step 8: Run the full suite and commit**
+- [ ] **Step 4: Run the full suite and commit**
 
 ```bash
 ./scripts/test.sh
-git add DogballWhisper/Core/Permissions.swift DogballWhisper/UI/OnboardingView.swift Tests/PermissionsTests.swift
-git commit -m "feat: permission handling and first-run onboarding"
+git add DogballWhisper/UI/OnboardingView.swift DogballWhisper/App/DogballWhisperApp.swift
+git commit -m "feat: first-run onboarding"
 ```
 
 ---

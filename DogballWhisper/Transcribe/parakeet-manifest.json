@@ -1,0 +1,90 @@
+{
+ "prefix": "parakeet-tdt-0.6b-v3",
+ "totalBytes": 483105645,
+ "files": [
+  {
+   "path": "Decoder.mlmodelc/analytics/coremldata.bin",
+   "size": 243
+  },
+  {
+   "path": "Decoder.mlmodelc/coremldata.bin",
+   "size": 554
+  },
+  {
+   "path": "Decoder.mlmodelc/metadata.json",
+   "size": 3427
+  },
+  {
+   "path": "Decoder.mlmodelc/model.mil",
+   "size": 13110
+  },
+  {
+   "path": "Decoder.mlmodelc/weights/weight.bin",
+   "size": 23604992
+  },
+  {
+   "path": "Encoder.mlmodelc/analytics/coremldata.bin",
+   "size": 243
+  },
+  {
+   "path": "Encoder.mlmodelc/coremldata.bin",
+   "size": 485
+  },
+  {
+   "path": "Encoder.mlmodelc/metadata.json",
+   "size": 2921
+  },
+  {
+   "path": "Encoder.mlmodelc/model.mil",
+   "size": 959769
+  },
+  {
+   "path": "Encoder.mlmodelc/weights/weight.bin",
+   "size": 445187200
+  },
+  {
+   "path": "JointDecisionv3.mlmodelc/analytics/coremldata.bin",
+   "size": 243
+  },
+  {
+   "path": "JointDecisionv3.mlmodelc/coremldata.bin",
+   "size": 521
+  },
+  {
+   "path": "JointDecisionv3.mlmodelc/metadata.json",
+   "size": 3453
+  },
+  {
+   "path": "JointDecisionv3.mlmodelc/model.mil",
+   "size": 11775
+  },
+  {
+   "path": "JointDecisionv3.mlmodelc/weights/weight.bin",
+   "size": 12642764
+  },
+  {
+   "path": "Preprocessor.mlmodelc/analytics/coremldata.bin",
+   "size": 243
+  },
+  {
+   "path": "Preprocessor.mlmodelc/coremldata.bin",
+   "size": 486
+  },
+  {
+   "path": "Preprocessor.mlmodelc/metadata.json",
+   "size": 2841
+  },
+  {
+   "path": "Preprocessor.mlmodelc/model.mil",
+   "size": 28181
+  },
+  {
+   "path": "Preprocessor.mlmodelc/weights/weight.bin",
+   "size": 491072
+  },
+  {
+   "path": "parakeet_vocab.json",
+   "size": 151122
+  }
+ ]
+}
