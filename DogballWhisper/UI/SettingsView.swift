@@ -200,17 +200,25 @@ private struct CleanupSettingsTab: View {
     /// Fast, inexpensive models suited to a short rewrite. Not exhaustive on
     /// purpose — OpenRouter carries hundreds, and the custom field is there
     /// for anything not listed.
-    /// Measured against this app's actual request shape, not guessed at.
-    /// Round trip for a one-sentence transcript:
-    ///   openai/gpt-4.1              1.2s
-    ///   anthropic/claude-haiku-4.5  1.2s
-    ///   z-ai/glm-5-turbo            1.6s
-    /// `google/gemini-3.5-flash` is deliberately absent: its endpoint rejects
-    /// a disabled-reasoning request outright, and allowing reasoning puts it
-    /// at 3.0s, exactly the timeout. It cannot work here either way.
+    /// Every model here was measured against this app's exact request shape:
+    /// three transcript lengths, three runs each, reasoning disabled.
+    ///
+    ///     openai/gpt-4.1-nano         0.86s median, most faithful
+    ///     amazon/nova-micro-v1        0.89s
+    ///     openai/gpt-4.1              1.05s
+    ///     anthropic/claude-haiku-4.5  1.24s
+    ///     z-ai/glm-5-turbo            1.70s
+    ///
+    /// Both Gemini models are deliberately absent: their endpoints reject a
+    /// disabled-reasoning request outright, and permitting reasoning puts them
+    /// at the timeout. cohere/command-r7b is absent for quality, not speed —
+    /// it rewrites rather than cleans ("Okay, I understand. We can merge the
+    /// code to the 'main' branch...").
     private static let suggestedModels = [
-        "anthropic/claude-haiku-4.5",
+        "openai/gpt-4.1-nano",
+        "amazon/nova-micro-v1",
         "openai/gpt-4.1",
+        "anthropic/claude-haiku-4.5",
         "z-ai/glm-5-turbo",
     ]
 

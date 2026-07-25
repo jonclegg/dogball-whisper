@@ -18,7 +18,12 @@ final class Preferences {
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
     }
 
-    static let defaultCleanupModelID = "anthropic/claude-haiku-4.5"
+    /// Measured, not guessed. Median round trip for a one-sentence dictation,
+    /// disabled reasoning, over three transcript lengths and three runs each:
+    /// gpt-4.1-nano 0.86s, nova-micro 0.89s, gpt-4.1 1.05s, haiku-4.5 1.24s.
+    /// nano was also the most faithful of the fast ones, keeping the speaker's
+    /// "Okay, so ... maybe" instead of tidying it away.
+    static let defaultCleanupModelID = "openai/gpt-4.1-nano"
 
     /// Kept deliberately short. Every character here is input the cleanup model
     /// reads before it can answer, and this call sits between the user letting

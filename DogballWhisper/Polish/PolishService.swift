@@ -4,6 +4,7 @@ enum PolishError: LocalizedError, Equatable {
     case missingAPIKey
     case emptyResponse
     case http(Int, String)
+    case requiresReasoning(String)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +14,8 @@ enum PolishError: LocalizedError, Equatable {
             return "The cleanup model returned nothing."
         case let .http(code, body):
             return "OpenRouter error \(code): \(body)"
+        case let .requiresReasoning(model):
+            return "\(model) always thinks before answering, which is too slow for dictation. Choose another model in Settings."
         }
     }
 }
@@ -32,10 +35,10 @@ final class PolishService: TextCleaning {
         let model: String
         let messages: [Message]
         let temperature: Double
-        /// Cleanup needs no thinking tokens; they only add latency. Some
-        /// endpoints refuse to have it turned off, though, so this is
-        /// omitted entirely on the retry — see `disablingReasoningRejected`.
-        let reasoning: Reasoning?
+        /// Cleanup needs no thinking tokens; they only add latency. Every
+        /// model this app offers accepts having it turned off — that is a
+        /// selection criterion, checked by measurement, not an assumption.
+        let reasoning: Reasoning
     }
 
     /// True for the 400 an endpoint returns when it mandates reasoning.
@@ -81,24 +84,25 @@ final class PolishService: TextCleaning {
         ]
 
         do {
-            return try await send(
-                key: key, model: model, messages: messages, disableReasoning: true)
+            return try await send(key: key, model: model, messages: messages)
         } catch let PolishError.http(status, body)
             where Self.disablingReasoningRejected(status: status, body: body)
         {
-            // The endpoint insists on reasoning. Ask again without the field
-            // rather than failing the dictation over a latency optimisation.
-            Diagnostics.log("openrouter: \(model) requires reasoning, retrying without it")
-            return try await send(
-                key: key, model: model, messages: messages, disableReasoning: false)
+            // Deliberately not retried without the field. A model that
+            // mandates reasoning is too slow for this call regardless —
+            // measured at 3.0s against a 3.0s budget — so a retry would only
+            // convert a clear failure into a silent timeout, and the user
+            // would be left wondering why cleanup "sometimes" works. Say what
+            // is wrong instead.
+            Diagnostics.log("openrouter: \(model) mandates reasoning, which is too slow here")
+            throw PolishError.requiresReasoning(model)
         }
     }
 
     private func send(
         key: String,
         model: String,
-        messages: [ChatRequest.Message],
-        disableReasoning: Bool
+        messages: [ChatRequest.Message]
     ) async throws -> String {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -109,7 +113,7 @@ final class PolishService: TextCleaning {
                 model: model,
                 messages: messages,
                 temperature: 0,
-                reasoning: disableReasoning ? ChatRequest.Reasoning(enabled: false) : nil
+                reasoning: ChatRequest.Reasoning(enabled: false)
             )
         )
 
