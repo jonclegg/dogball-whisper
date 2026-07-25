@@ -331,6 +331,20 @@ enum CaretLocator {
         guard !isObservingAppSwitches else { return }
         isObservingAppSwitches = true
 
+        // Whatever is already frontmost never sends an activation
+        // notification, so it would otherwise stay un-nudged until the user
+        // switched away and back.
+        if let front = NSWorkspace.shared.frontmostApplication {
+            let pid = front.processIdentifier
+            let launchDate = front.launchDate
+            let bundleURL = front.bundleURL
+            nudgeQueue.async {
+                _ = nudge(
+                    pid: pid, launchDate: launchDate, bundleURL: bundleURL,
+                    requireChromiumLikeBundle: true)
+            }
+        }
+
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
