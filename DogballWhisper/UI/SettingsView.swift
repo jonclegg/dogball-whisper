@@ -26,35 +26,13 @@ private struct GeneralSettingsTab: View {
     let onHotkeyChange: (HotkeyBinding) -> Void
     let onLaunchAtLoginChange: () -> Void
 
-    @State private var binding: HotkeyBinding = .rightOption
     @State private var insertionMode: InsertionMode = .paste
     @State private var launchAtLogin = false
-    @State private var fnWarning: String?
-    // True once the user has picked the "Custom" row but has not yet
-    // recorded a combo. Drives the Picker's displayed selection and reveals
-    // the recorder without ever writing into `binding` — the placeholder
-    // Control+Space tag behind "Custom" must never itself become the live
-    // hotkey. See `presetSelection` for why.
-    @State private var isChoosingCustom = false
 
     var body: some View {
         Form {
             Section("Hold to talk") {
-                Picker("Key", selection: presetSelection) {
-                    Text("Right ⌥").tag(HotkeyBinding.rightOption)
-                    Text("Right ⌘").tag(HotkeyBinding.rightCommand)
-                    Text("fn / 🌐").tag(HotkeyBinding.fn)
-                    Text("Custom").tag(customTag)
-                }
-                if binding.kind == .combo || isChoosingCustom {
-                    ShortcutRecorderView(binding: $binding)
-                }
-                if let fnWarning {
-                    Text(fnWarning).font(.callout).foregroundStyle(.orange)
-                    Button("Open keyboard settings") {
-                        Permissions.openKeyboardSettings()
-                    }
-                }
+                HotkeyPickerView(preferences: preferences, onHotkeyChange: onHotkeyChange)
             }
             Section("Insertion") {
                 Picker("When dictation finishes", selection: $insertionMode) {
@@ -69,63 +47,14 @@ private struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            binding = preferences.hotkeyBinding
             insertionMode = preferences.insertionMode
             launchAtLogin = LoginItem.isEnabled
-            isChoosingCustom = false
-            refreshFnWarning()
-        }
-        .onChange(of: binding) { _, new in
-            isChoosingCustom = false
-            preferences.hotkeyBinding = new
-            onHotkeyChange(new)
-            refreshFnWarning()
         }
         .onChange(of: insertionMode) { _, new in preferences.insertionMode = new }
         .onChange(of: launchAtLogin) { _, new in
             LoginItem.setEnabled(new)
             onLaunchAtLoginChange()
         }
-    }
-
-    /// Sentinel for the "Custom" row, so picking it switches the UI into
-    /// recording mode without clobbering an existing custom binding.
-    private var customTag: HotkeyBinding {
-        binding.kind == .combo ? binding : HotkeyBinding(comboKeyCode: 49, modifiers: [.maskControl])
-    }
-
-    /// Selecting a preset row commits it straight to `binding`, which
-    /// persists and pushes it to the live monitor. Selecting "Custom" is
-    /// cosmetic only: its tag is a placeholder (Control+Space) that must
-    /// never itself become the active hotkey, so this just flips
-    /// `isChoosingCustom` to reveal the recorder. `binding` — and therefore
-    /// the persisted preference and the live monitor — only change once
-    /// `ShortcutRecorderView` captures a real keypress and writes through
-    /// `$binding` directly. Until then the previous binding stays in effect.
-    private var presetSelection: Binding<HotkeyBinding> {
-        Binding(
-            get: { isChoosingCustom ? customTag : binding },
-            set: { newValue in
-                if newValue == customTag, binding.kind != .combo {
-                    isChoosingCustom = true
-                } else {
-                    isChoosingCustom = false
-                    binding = newValue
-                }
-            }
-        )
-    }
-
-    /// macOS claims fn for emoji, input switching, or its own dictation unless
-    /// "Press 🌐 to" is set to Do Nothing.
-    private func refreshFnWarning() {
-        guard binding == .fn else {
-            fnWarning = nil
-            return
-        }
-        fnWarning = Permissions.fnKeyIsClaimedBySystem
-            ? "macOS currently uses fn for something else. Set Keyboard > Press 🌐 to > Do Nothing."
-            : nil
     }
 }
 

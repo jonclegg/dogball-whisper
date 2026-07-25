@@ -37,6 +37,19 @@ rebuilding it for each one.
       a second (it is polled, not pushed)
 - [ ] Download the default model from the setup window: progress advances,
       then "Start dictating" becomes enabled
+- [ ] Force that download to fail (turn off Wi-Fi before clicking Download,
+      or kill the network partway through), see the orange error message
+      under the model row, then restore the network and click Download
+      again: once the retry succeeds the error message is gone — it must
+      not still be sitting next to the green "Installed" state, directly
+      above the now-enabled "Start dictating" button
+- [ ] Hotkey step in the setup window (between the model and cleanup
+      sections): switch the binding from the default right ⌥ to right ⌘,
+      then to a custom recorded combo, using the same picker Settings >
+      General has. Finish setup ("Start dictating") and, without opening
+      Settings, try the new key immediately: dictation triggers on the
+      first try, proving the change reached the live `HotkeyMonitor` from
+      onboarding the same way a change in Settings does
 - [ ] **(never verified)** Installed but not active: with the model files
       already downloaded, run `defaults delete com.jonclegg.DogballWhisper`
       and relaunch. The model row offers a "Use" button rather than a bare

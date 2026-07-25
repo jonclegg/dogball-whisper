@@ -97,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboarding = OnboardingWindowController(
                 preferences: preferences,
                 models: models,
+                onHotkeyChange: { [weak self] binding in self?.monitor?.binding = binding },
                 onFinished: { [weak self] in
                     guard let self else { return }
                     self.preferences.hasCompletedOnboarding = true

@@ -9,19 +9,24 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let preferences: Preferences
     private let models: ModelManager
+    private let onHotkeyChange: (HotkeyBinding) -> Void
     private let onFinished: () -> Void
     private let poller = OnboardingPermissionPoller()
 
-    init(preferences: Preferences, models: ModelManager, onFinished: @escaping () -> Void) {
+    init(
+        preferences: Preferences, models: ModelManager,
+        onHotkeyChange: @escaping (HotkeyBinding) -> Void, onFinished: @escaping () -> Void
+    ) {
         self.preferences = preferences
         self.models = models
+        self.onHotkeyChange = onHotkeyChange
         self.onFinished = onFinished
     }
 
     func show() {
         if window == nil {
             let window = NSWindow(
-                contentRect: CGRect(x: 0, y: 0, width: 520, height: 560),
+                contentRect: CGRect(x: 0, y: 0, width: 520, height: 700),
                 styleMask: [.titled, .closable],
                 backing: .buffered,
                 defer: false
@@ -34,6 +39,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                     preferences: preferences,
                     models: models,
                     poller: poller,
+                    onHotkeyChange: onHotkeyChange,
                     onFinished: { [weak self] in
                         self?.onFinished()
                         self?.window?.close()
@@ -94,6 +100,7 @@ struct OnboardingView: View {
     let preferences: Preferences
     let models: ModelManager
     let poller: OnboardingPermissionPoller
+    let onHotkeyChange: (HotkeyBinding) -> Void
     let onFinished: () -> Void
 
     @State private var apiKey = ""
@@ -149,6 +156,16 @@ struct OnboardingView: View {
                         Text(error).font(.caption).foregroundStyle(.orange)
                     }
                 }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Hotkey").font(.headline)
+                Text("Hold this key to dictate, let go to paste. Change it now if your keyboard has no right ⌥. You can always come back to this in Settings later.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HotkeyPickerView(preferences: preferences, onHotkeyChange: onHotkeyChange)
             }
 
             Divider()
