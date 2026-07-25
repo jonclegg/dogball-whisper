@@ -158,4 +158,25 @@ final class PolishServiceTests: XCTestCase {
         // Real content that merely contains backticks must survive untouched.
         XCTAssertEqual(PolishService.unwrap("Use `git status` first."), "Use `git status` first.")
     }
+
+    // Measured against the real endpoint: google/gemini-3.5-flash answers a
+    // disabled-reasoning request with 400 "Reasoning is mandatory for this
+    // endpoint and cannot be disabled." A dictation must not be lost over a
+    // latency optimisation, so that specific rejection triggers one retry.
+    func testAMandatoryReasoningRejectionIsRecognised() {
+        XCTAssertTrue(PolishService.disablingReasoningRejected(
+            status: 400,
+            body: #"{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}"#))
+    }
+
+    func testOtherFailuresAreNotTreatedAsReasoningRejections() {
+        XCTAssertFalse(PolishService.disablingReasoningRejected(
+            status: 400, body: #"{"error":{"message":"invalid model"}}"#))
+        XCTAssertFalse(PolishService.disablingReasoningRejected(
+            status: 401, body: "unauthorized"))
+        // Right message, wrong status: a 500 mentioning reasoning is an
+        // outage, and retrying without the field will not help.
+        XCTAssertFalse(PolishService.disablingReasoningRejected(
+            status: 500, body: "reasoning service unavailable"))
+    }
 }

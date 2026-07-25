@@ -200,11 +200,18 @@ private struct CleanupSettingsTab: View {
     /// Fast, inexpensive models suited to a short rewrite. Not exhaustive on
     /// purpose — OpenRouter carries hundreds, and the custom field is there
     /// for anything not listed.
+    /// Measured against this app's actual request shape, not guessed at.
+    /// Round trip for a one-sentence transcript:
+    ///   openai/gpt-4.1              1.2s
+    ///   anthropic/claude-haiku-4.5  1.2s
+    ///   z-ai/glm-5-turbo            1.6s
+    /// `google/gemini-3.5-flash` is deliberately absent: its endpoint rejects
+    /// a disabled-reasoning request outright, and allowing reasoning puts it
+    /// at 3.0s, exactly the timeout. It cannot work here either way.
     private static let suggestedModels = [
         "anthropic/claude-haiku-4.5",
-        "google/gemini-3.5-flash",
-        "z-ai/glm-5-turbo",
         "openai/gpt-4.1",
+        "z-ai/glm-5-turbo",
     ]
 
     /// Sentinel for the "Custom…" row. Contains a space, so it can never
@@ -279,9 +286,24 @@ private struct CleanupSettingsTab: View {
             prompt = preferences.cleanupPrompt
             apiKey = KeychainStore.read() ?? ""
         }
-        .onChange(of: enabled) { _, new in preferences.cleanupEnabled = new }
-        .onChange(of: modelID) { _, new in preferences.cleanupModelID = new }
-        .onChange(of: prompt) { _, new in preferences.cleanupPrompt = new }
+        // Each of these writes only a genuine change. `onAppear` loads the
+        // current values into `@State`, which is itself a change from the
+        // empty initial value and therefore fires `onChange` — so writing
+        // unconditionally persisted whatever the default happened to be the
+        // first time the tab was ever opened, freezing that copy forever and
+        // making later improvements to the default invisible.
+        .onChange(of: enabled) { _, new in
+            guard new != preferences.cleanupEnabled else { return }
+            preferences.cleanupEnabled = new
+        }
+        .onChange(of: modelID) { _, new in
+            guard new != preferences.cleanupModelID else { return }
+            preferences.cleanupModelID = new
+        }
+        .onChange(of: prompt) { _, new in
+            guard new != preferences.cleanupPrompt else { return }
+            preferences.cleanupPrompt = new
+        }
         .onChange(of: apiKey) { _, new in KeychainStore.save(new) }
     }
 

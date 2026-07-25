@@ -32,8 +32,18 @@ final class PolishService: TextCleaning {
         let model: String
         let messages: [Message]
         let temperature: Double
-        /// Cleanup needs no thinking tokens; they only add latency.
-        let reasoning = Reasoning(enabled: false)
+        /// Cleanup needs no thinking tokens; they only add latency. Some
+        /// endpoints refuse to have it turned off, though, so this is
+        /// omitted entirely on the retry — see `disablingReasoningRejected`.
+        let reasoning: Reasoning?
+    }
+
+    /// True for the 400 an endpoint returns when it mandates reasoning.
+    /// Matching on the message is unpleasant but there is no distinct code:
+    /// `google/gemini-3.5-flash` answers 400 with "Reasoning is mandatory for
+    /// this endpoint and cannot be disabled."
+    static func disablingReasoningRejected(status: Int, body: String) -> Bool {
+        status == 400 && body.lowercased().contains("reasoning")
     }
 
     private struct ChatResponse: Decodable {
@@ -65,6 +75,31 @@ final class PolishService: TextCleaning {
         }
         Diagnostics.log("openrouter: requesting \(model), key present (\(key.count) chars)")
 
+        let messages: [ChatRequest.Message] = [
+            .init(role: "system", content: prompt),
+            .init(role: "user", content: text),
+        ]
+
+        do {
+            return try await send(
+                key: key, model: model, messages: messages, disableReasoning: true)
+        } catch let PolishError.http(status, body)
+            where Self.disablingReasoningRejected(status: status, body: body)
+        {
+            // The endpoint insists on reasoning. Ask again without the field
+            // rather than failing the dictation over a latency optimisation.
+            Diagnostics.log("openrouter: \(model) requires reasoning, retrying without it")
+            return try await send(
+                key: key, model: model, messages: messages, disableReasoning: false)
+        }
+    }
+
+    private func send(
+        key: String,
+        model: String,
+        messages: [ChatRequest.Message],
+        disableReasoning: Bool
+    ) async throws -> String {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -72,11 +107,9 @@ final class PolishService: TextCleaning {
         request.httpBody = try JSONEncoder().encode(
             ChatRequest(
                 model: model,
-                messages: [
-                    .init(role: "system", content: prompt),
-                    .init(role: "user", content: text),
-                ],
-                temperature: 0
+                messages: messages,
+                temperature: 0,
+                reasoning: disableReasoning ? ChatRequest.Reasoning(enabled: false) : nil
             )
         )
 
