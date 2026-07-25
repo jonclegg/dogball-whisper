@@ -25,6 +25,14 @@ final class PasteboardTextInserter: TextInserting {
     /// letting two restores interleave.
     private var pendingRestore: DispatchWorkItem?
 
+    /// Injected so the secure-input gate can be exercised without engaging
+    /// real secure event input on the machine running the tests.
+    private let secureInputProvider: () -> Bool
+
+    init(secureInputProvider: @escaping () -> Bool = CaretLocator.isSecureInputActive) {
+        self.secureInputProvider = secureInputProvider
+    }
+
     func insert(_ text: String, targetPID: pid_t?, mode: InsertionMode) -> InsertOutcome {
         pendingRestore?.cancel()
 
@@ -42,11 +50,16 @@ final class PasteboardTextInserter: TextInserting {
         // recording started. Do not turn a nil PID into a refusal to paste.
         let stillFocused = targetPID == nil
             || NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
-        guard mode == .paste, stillFocused, AXIsProcessTrusted() else {
+        guard Self.shouldPaste(
+            mode: mode,
+            stillFocused: stillFocused,
+            isTrusted: AXIsProcessTrusted(),
+            secureInputActive: secureInputProvider()
+        ) else {
             return .copiedToClipboard
         }
 
-        Diagnostics.log("paste: posting command-V for \(text.count) characters")
+        Diagnostics.verbose("paste: posting command-V for \(text.count) characters")
         postCommandV()
         let restore = DispatchWorkItem { [weak self] in
             self?.pendingRestore = nil
@@ -63,6 +76,24 @@ final class PasteboardTextInserter: TextInserting {
         pendingRestore = restore
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay, execute: restore)
         return .pasted
+    }
+
+    /// Whether a synthetic ⌘V may actually be posted, or whether the text
+    /// should be left on the clipboard and the user told about it.
+    ///
+    /// The secure-input check is the one that is not obvious. The coordinator
+    /// already refused to *start* a dictation into a password field, but that
+    /// was a second or more ago — transcription and cleanup have run since,
+    /// and in that window a `sudo` prompt can appear, Terminal's Secure
+    /// Keyboard Entry can be switched on, or an authorization sheet can open.
+    /// Secure input swallows synthetic keystrokes silently, so posting ⌘V
+    /// into it would insert nothing, report `.pasted` anyway, dismiss the
+    /// panel with no message, and then restore the clipboard 150ms later,
+    /// leaving the user with no text and no way to recover it.
+    static func shouldPaste(
+        mode: InsertionMode, stillFocused: Bool, isTrusted: Bool, secureInputActive: Bool
+    ) -> Bool {
+        mode == .paste && stillFocused && isTrusted && !secureInputActive
     }
 
     /// Whether a delayed restore should still apply. Extracted as a pure
