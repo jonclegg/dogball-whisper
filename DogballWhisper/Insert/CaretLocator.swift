@@ -1,5 +1,7 @@
 import AppKit
 import ApplicationServices
+// `IsSecureEventInputEnabled` lives in HIToolbox and is reachable no other
+// way; ApplicationServices does not re-export it. This import is load-bearing.
 import Carbon
 import QuartzCore
 
@@ -114,6 +116,28 @@ enum CaretLocator {
         IsSecureEventInputEnabled()
     }
 
+    /// Whether a failed `kAXFocusedUIElementAttribute` query means the app
+    /// has no accessibility tree built, which is the only thing the nudge
+    /// fixes and the only thing that justifies its cost (see `nudge`).
+    ///
+    /// `.noValue` is emphatically not that: it is the ordinary answer from an
+    /// ordinary AppKit app with nothing focused — Finder on the desktop,
+    /// Preview showing a PDF, a fullscreen video player — and nudging those
+    /// switches them into `AXEnhancedUserInterface` permanently, which is
+    /// what makes window managers fight over resizes. One dictation keypress
+    /// while Finder is frontmost must not do that to Finder for the rest of
+    /// its life.
+    static func shouldNudge(forFocusError error: AXError) -> Bool {
+        switch error {
+        // The app answered nothing at all within the messaging timeout, or
+        // does not implement the attribute: no tree.
+        case .cannotComplete, .attributeUnsupported, .notImplemented:
+            return true
+        default:
+            return false
+        }
+    }
+
     static func current() -> CaretLocation {
         let frontApp = NSWorkspace.shared.frontmostApplication
         let frontPID = frontApp?.processIdentifier
@@ -140,21 +164,22 @@ enum CaretLocator {
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
 
         var focusedRef: CFTypeRef?
-        var focusErr = AXUIElementCopyAttributeValue(
+        let focusErr = AXUIElementCopyAttributeValue(
             appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef)
-        if focusErr != .success {
-            // The failure itself is the signal that this app has not built
-            // an accessibility tree, which is the only case that warrants
-            // the nudge (see `nudge` for why it is not applied blindly).
+        if shouldNudge(forFocusError: focusErr) {
             // Chromium and Electron build the tree lazily and asynchronously,
-            // so the retry below usually still fails on this very first
-            // press; the point of nudging here is the *next* press, and the
-            // activation observer normally gets there first anyway. There is
-            // deliberately no sleep-and-retry: this runs while the user is
-            // already talking.
-            if nudge(pid: frontPID, launchDate: frontApp?.launchDate, requireChromiumLikeBundle: false) {
-                focusErr = AXUIElementCopyAttributeValue(
-                    appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+            // so nudging cannot help this press — by the code's own
+            // admission the benefit only lands on the *next* one, and the
+            // activation observer normally gets there first anyway. So it
+            // goes on the same background queue the activation path uses
+            // rather than costing the user two synchronous cross-process
+            // attribute writes while they are already talking.
+            let launchDate = frontApp?.launchDate
+            let bundleURL = frontApp?.bundleURL
+            nudgeQueue.async {
+                _ = nudge(
+                    pid: frontPID, launchDate: launchDate, bundleURL: bundleURL,
+                    requireChromiumLikeBundle: true)
             }
         }
         // Bind the ref before asking for its type: `CFGetTypeID` takes an
@@ -195,18 +220,18 @@ enum CaretLocator {
         // anchored at the wrong end, and that cannot be told apart from
         // outside the process.
         if let rect = caretRectViaTextMarker(element), isPlausibleCaretRect(rect) {
-            Diagnostics.log("caret tier=textMarker rect=\(Diagnostics.describe(rect))")
+            Diagnostics.verbose("caret tier=textMarker rect=\(Diagnostics.describe(rect))")
             return CaretLocation(rectQuartz: rect, pid: pid)
         }
         if let rect = caretRectViaSelectedRange(element), isPlausibleCaretRect(rect) {
-            Diagnostics.log("caret tier=selectedRange rect=\(Diagnostics.describe(rect))")
+            Diagnostics.verbose("caret tier=selectedRange rect=\(Diagnostics.describe(rect))")
             return CaretLocation(rectQuartz: rect, pid: pid)
         }
         if let rect = caretRectFromElementFrame(element) {
-            Diagnostics.log("caret tier=elementFrame rect=\(Diagnostics.describe(rect))")
+            Diagnostics.verbose("caret tier=elementFrame rect=\(Diagnostics.describe(rect))")
             return CaretLocation(rectQuartz: rect, pid: pid)
         }
-        Diagnostics.log("caret tier=none")
+        Diagnostics.verbose("caret tier=none")
         return CaretLocation(rectQuartz: nil, pid: pid)
     }
 
@@ -414,10 +439,10 @@ enum CaretLocator {
     /// `AXEnhancedUserInterface` is the flag VoiceOver sets, and it is not
     /// free: on native AppKit apps it changes window-resize and animation
     /// behavior (the thing window managers fight with), and it is never
-    /// unset. So it is applied only to apps that look Chromium/Electron
-    /// (the activation path) or that have already failed to answer
-    /// `kAXFocusedUIElementAttribute` at all, which is the signal that no
-    /// tree exists to query (the `current()` path).
+    /// unset. So it is only ever applied to apps that look Chromium/Electron
+    /// — both call sites pass `requireChromiumLikeBundle: true`, on
+    /// activation and after a focus query that answered nothing at all, and
+    /// a third call site that skipped that check would be a bug.
     /// `AXManualAccessibility` is Electron-specific and inert elsewhere.
     ///
     /// Returns true when this call is what performed the nudge.
@@ -497,7 +522,7 @@ enum CaretLocator {
         // both edges agree. A wide rect means the app answered with the whole
         // line or field instead, and then the trailing edge is the right-hand
         // end of the box rather than where the caret sits.
-        Diagnostics.log("caret raw textMarker=\(Diagnostics.describe(cgRect))")
+        Diagnostics.verbose("caret raw textMarker=\(Diagnostics.describe(cgRect))")
         return caretAnchor(for: cgRect)
     }
 
@@ -525,7 +550,7 @@ enum CaretLocator {
         var rect = CGRect.zero
         guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect), isFiniteRect(rect), rect.height > 0
         else { return nil }
-        Diagnostics.log("caret raw selectedRange=\(Diagnostics.describe(rect))")
+        Diagnostics.verbose("caret raw selectedRange=\(Diagnostics.describe(rect))")
         return caretAnchor(for: rect)
     }
 

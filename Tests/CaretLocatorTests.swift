@@ -164,6 +164,34 @@ final class CaretLocatorTests: XCTestCase {
         XCTAssertFalse(CaretLocator.looksChromiumOrElectron(bundleURL: nil))
     }
 
+    // MARK: - When the nudge is warranted
+
+    // `AXEnhancedUserInterface` is never unset once set, and on a native
+    // AppKit app it changes window-resize and animation behavior — the thing
+    // window managers fight with. So the nudge is only for an app that has
+    // no accessibility tree at all.
+    func testAFailureThatMeansNoTreeWasBuiltWarrantsTheNudge() {
+        XCTAssertTrue(CaretLocator.shouldNudge(forFocusError: .cannotComplete))
+        XCTAssertTrue(CaretLocator.shouldNudge(forFocusError: .attributeUnsupported))
+        XCTAssertTrue(CaretLocator.shouldNudge(forFocusError: .notImplemented))
+    }
+
+    // The one that matters most: `.noValue` is the ordinary answer from an
+    // ordinary app with nothing focused (Finder on the desktop, Preview
+    // showing a PDF). Nudging on it would switch every such app into
+    // enhanced-user-interface mode for the rest of its life, one dictation
+    // keypress at a time.
+    func testAnAppWithNothingFocusedIsNeverNudged() {
+        XCTAssertFalse(CaretLocator.shouldNudge(forFocusError: .noValue))
+    }
+
+    func testASuccessfulOrOtherwiseUnrelatedResultIsNeverNudged() {
+        XCTAssertFalse(CaretLocator.shouldNudge(forFocusError: .success))
+        XCTAssertFalse(CaretLocator.shouldNudge(forFocusError: .apiDisabled))
+        XCTAssertFalse(CaretLocator.shouldNudge(forFocusError: .invalidUIElement))
+        XCTAssertFalse(CaretLocator.shouldNudge(forFocusError: .notificationUnsupported))
+    }
+
     // MARK: - Walk bounds
 
     // The descent runs on the main actor while the user is already talking,
