@@ -69,6 +69,14 @@ rebuilding it for each one.
       hung, not just slow)
 - [ ] Press esc with no dictation running: normal esc behavior in the
       focused app is unaffected (for example, esc still closes a dialog)
+- [ ] Secure-field refusal: click into a password field (Safari or Chrome's
+      own sign-in form works, or any macOS password prompt) and hold the
+      dictation key. Recording never starts — no mic level animation, no
+      "Recording" panel — and the panel shows the notice "Not in a password
+      field" instead. Confirm nothing is pasted and no request is made to
+      OpenRouter (this is the one case a leak would mean shipping a
+      password to a third party, so treat any deviation as a blocker, not
+      a nit)
 - [ ] Rebind to right ⌘ in Settings and confirm it works without a relaunch
 - [ ] Rebind to a custom combo (⌃⇧D) and confirm the keystroke does not
       reach the app you were typing in
@@ -127,8 +135,20 @@ the same apps.
 ## 5. Panel placement
 
 - [ ] Native app with a caret (TextEdit): panel floats just above the caret
-- [ ] App reporting no caret (most Electron apps): panel appears near the
-      bottom center
+- [ ] Browser text field (Twitter/X compose box, and a Gmail compose body):
+      panel floats just above the caret, not at the bottom of the screen.
+      This is the main case `CaretLocator`'s app-rooted query plus text-leaf
+      descent exists for
+- [ ] Electron app (VS Code's editor or find box, and a Slack message box):
+      panel floats just above the caret. This depends on the
+      `AXEnhancedUserInterface`/`AXManualAccessibility` nudge landing before
+      the first query — if the panel appears at the bottom center on the
+      *first* dictation in a freshly-focused Electron app but follows the
+      caret correctly from the second dictation onward, the nudge is
+      arriving but the tree isn't built yet on the very first query; note
+      that distinction rather than just pass/fail
+- [ ] A field where no rect at all is available: panel falls back to bottom
+      center rather than to some earlier bad position, and nothing traps
 - [ ] Caret near the top of the screen: panel flips below it instead of
       clipping off the top
 - [ ] Second display: panel appears on the display holding the caret

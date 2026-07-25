@@ -160,11 +160,20 @@ final class DictationCoordinator {
         // coordinator stuck after the first error until the terminal-reset
         // timer got around to firing.
         guard !isBusy else { return }
+
+        location = CaretLocator.current()
+        // Dictated text is sent to OpenRouter for cleanup, so recording into
+        // a password field would ship the password to a third party. This
+        // gate runs before the engine-availability check below on purpose:
+        // no dictation may start here no matter what else is true.
+        guard !location.isSecureField else {
+            notice("Not in a password field")
+            return
+        }
         guard engineProvider() != nil else {
             fail(TranscriptionError.noModelInstalled.localizedDescription)
             return
         }
-        location = CaretLocator.current()
         do {
             try recorder.start()
             state = .recording
