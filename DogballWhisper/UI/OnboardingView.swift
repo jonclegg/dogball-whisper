@@ -130,6 +130,9 @@ struct OnboardingView: View {
                     Text("More models are available in Settings once you are set up.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let error = models.lastError {
+                        Text(error).font(.caption).foregroundStyle(.orange)
+                    }
                 }
             }
 

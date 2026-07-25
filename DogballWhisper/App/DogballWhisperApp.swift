@@ -42,7 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.coordinator = coordinator
 
-        let menuBar = MenuBarController(onOpenSettings: { [weak self] in self?.showSettings() })
+        let menuBar = MenuBarController(
+            onOpenSettings: { [weak self] in self?.showSettings() },
+            onFinishSetup: { [weak self] in self?.showOnboarding() }
+        )
         self.menuBar = menuBar
         refreshActiveModelLabel()
         // ModelManager is @Observable but its `activeModelID` is a computed
@@ -61,7 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.onEscape = { MainActor.assumeIsolated { coordinator.abort() } }
         self.monitor = monitor
 
-        if preferences.hasCompletedOnboarding && Permissions.allRequiredGranted {
+        let readyToLaunch = preferences.hasCompletedOnboarding && Permissions.allRequiredGranted
+        menuBar.setSetupIncomplete(!readyToLaunch)
+        if readyToLaunch {
             startMonitoring()
             Task {
                 await models.loadActiveEngine()
@@ -80,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onFinished: { [weak self] in
                     guard let self else { return }
                     self.preferences.hasCompletedOnboarding = true
+                    self.menuBar?.setSetupIncomplete(false)
                     self.startMonitoring()
                     Task {
                         await self.models.loadActiveEngine()
@@ -88,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             )
         }
+        // Idempotent: OnboardingWindowController.show() only builds the window
+        // once and otherwise just brings the existing one forward, and its
+        // poller's start() no-ops while already running. Safe to call again
+        // from the "Finish setup…" menu item while the window is already open.
         onboarding?.show()
     }
 

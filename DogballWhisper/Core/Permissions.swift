@@ -22,7 +22,7 @@ enum PermissionKind: String, CaseIterable {
         case .inputMonitoring:
             return "Notices when you hold the dictation key, in any app."
         case .accessibility:
-            return "Finds your text cursor and pastes the finished text. Without it, text is copied to the clipboard instead."
+            return "Finds your text cursor and pastes the finished text. Without it, text is copied to the clipboard instead, and the waveform panel sits in a fixed position instead of following your cursor."
         }
     }
 
