@@ -46,6 +46,7 @@ final class PasteboardTextInserter: TextInserting {
             return .copiedToClipboard
         }
 
+        Diagnostics.log("paste: posting command-V for \(text.count) characters")
         postCommandV()
         let restore = DispatchWorkItem { [weak self] in
             self?.pendingRestore = nil

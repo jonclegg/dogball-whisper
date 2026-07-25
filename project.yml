@@ -37,9 +37,25 @@ targets:
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Developer ID Application"
         DEVELOPMENT_TEAM: 22CTWHGWQQ
-        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_ENTITLEMENTS: DogballWhisper/DogballWhisper.entitlements
         ENABLE_APP_SANDBOX: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+      configs:
+        # Hardened Runtime is required to notarize, and notarization is what
+        # lets anyone but this machine open the app without Gatekeeper refusing
+        # it. The microphone entitlement is the price of admission; sandboxing
+        # stays off either way, because an Accessibility client cannot be
+        # sandboxed.
+        #
+        # Release only, and that restriction is load-bearing: Hardened Runtime
+        # refuses to load an injected library, so a hardened test host hangs
+        # before the XCTest bundle can connect to it. Tests build Debug.
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
+          # Without this, Xcode injects get-task-allow, which notarization rejects.
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        Debug:
+          ENABLE_HARDENED_RUNTIME: NO
 
   DogballWhisperTests:
     type: bundle.unit-test

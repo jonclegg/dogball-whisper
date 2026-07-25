@@ -247,6 +247,14 @@ final class DictationCoordinator {
         // started since, must not paste anything.
         guard isCurrent(token) else { return }
 
+        // Lengths and counts only, never the text itself: this is here to
+        // locate a duplicated-insertion bug, and a dictation app has no
+        // business writing what you said into the system log. A cleaned length
+        // near twice the raw length points at the cleanup model; equal lengths
+        // with doubled text on screen point at the paste being delivered twice.
+        Diagnostics.log(
+            "dictation \(token): raw=\(trimmed.count) final=\(finalText.count) insert#\(Diagnostics.nextInsertSequence())")
+
         let outcome = inserter.insert(
             finalText, targetPID: location.pid, mode: preferences.insertionMode)
 

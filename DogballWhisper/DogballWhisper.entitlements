@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened Runtime is required for notarization, and it blocks microphone
+	     access unless this entitlement is present. The event tap and the
+	     Accessibility calls need no entitlement: those are gated by TCC, not by
+	     the runtime. Deliberately absent: any App Sandbox key, because an
+	     Accessibility client cannot be sandboxed. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
