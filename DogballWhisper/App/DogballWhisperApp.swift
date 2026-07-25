@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: DictationCoordinator?
     private var monitor: HotkeyMonitor?
     private var settings: SettingsWindowController?
+    private var onboarding: OnboardingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = DictationPanelController()
@@ -60,12 +61,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.onEscape = { MainActor.assumeIsolated { coordinator.abort() } }
         self.monitor = monitor
 
-        // Task 12 puts onboarding in front of this.
-        startMonitoring()
-        Task {
-            await models.loadActiveEngine()
-            refreshActiveModelLabel()
+        if preferences.hasCompletedOnboarding && Permissions.allRequiredGranted {
+            startMonitoring()
+            Task {
+                await models.loadActiveEngine()
+                refreshActiveModelLabel()
+            }
+        } else {
+            showOnboarding()
         }
+    }
+
+    private func showOnboarding() {
+        if onboarding == nil {
+            onboarding = OnboardingWindowController(
+                preferences: preferences,
+                models: models,
+                onFinished: { [weak self] in
+                    guard let self else { return }
+                    self.preferences.hasCompletedOnboarding = true
+                    self.startMonitoring()
+                    Task {
+                        await self.models.loadActiveEngine()
+                        self.refreshActiveModelLabel()
+                    }
+                }
+            )
+        }
+        onboarding?.show()
     }
 
     private func refreshActiveModelLabel() {
