@@ -2,9 +2,9 @@ import SwiftUI
 
 /// The hold-to-talk key picker: right ⌥ / right ⌘ / fn / a custom recorded
 /// combo, plus the fn-conflict warning. Shared between Settings > General
-/// and onboarding's hotkey step so the "Custom" selection logic below (see
-/// `presetSelection`) — which was fixed once already after a review found it
-/// would silently bind the placeholder combo — exists in exactly one place.
+/// and onboarding's hotkey step, so the rule that picking "Custom" must not
+/// commit its placeholder combo lives in exactly one place — and now in a
+/// testable one: `HotkeyPresetSelection`, which this view only drives.
 ///
 /// Owns its own copy of the binding (seeded from `preferences.hotkeyBinding`
 /// on appear) and writes every change straight back through `preferences`
@@ -14,14 +14,8 @@ struct HotkeyPickerView: View {
     let preferences: Preferences
     let onHotkeyChange: (HotkeyBinding) -> Void
 
-    @State private var binding: HotkeyBinding = .rightOption
+    @State private var selection = HotkeyPresetSelection(binding: .rightOption)
     @State private var fnWarning: String?
-    // True once the user has picked the "Custom" row but has not yet
-    // recorded a combo. Drives the Picker's displayed selection and reveals
-    // the recorder without ever writing into `binding` — the placeholder
-    // Control+Space tag behind "Custom" must never itself become the live
-    // hotkey. See `presetSelection` for why.
-    @State private var isChoosingCustom = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -29,10 +23,10 @@ struct HotkeyPickerView: View {
                 Text("Right ⌥").tag(HotkeyBinding.rightOption)
                 Text("Right ⌘").tag(HotkeyBinding.rightCommand)
                 Text("fn / 🌐").tag(HotkeyBinding.fn)
-                Text("Custom").tag(customTag)
+                Text("Custom").tag(selection.customTag)
             }
-            if binding.kind == .combo || isChoosingCustom {
-                ShortcutRecorderView(binding: $binding)
+            if selection.binding.kind == .combo || selection.isChoosingCustom {
+                ShortcutRecorderView(binding: recordedBinding)
             }
             if let fnWarning {
                 Text(fnWarning).font(.callout).foregroundStyle(.orange)
@@ -42,50 +36,40 @@ struct HotkeyPickerView: View {
             }
         }
         .onAppear {
-            binding = preferences.hotkeyBinding
-            isChoosingCustom = false
+            selection = HotkeyPresetSelection(binding: preferences.hotkeyBinding)
             refreshFnWarning()
         }
-        .onChange(of: binding) { _, new in
-            isChoosingCustom = false
+        .onChange(of: selection.binding) { old, new in
+            guard new != old else { return }
             preferences.hotkeyBinding = new
             onHotkeyChange(new)
             refreshFnWarning()
         }
     }
 
-    /// Sentinel for the "Custom" row, so picking it switches the UI into
-    /// recording mode without clobbering an existing custom binding.
-    private var customTag: HotkeyBinding {
-        binding.kind == .combo ? binding : HotkeyBinding(comboKeyCode: 49, modifiers: [.maskControl])
-    }
-
-    /// Selecting a preset row commits it straight to `binding`, which
-    /// persists and pushes it to the live monitor. Selecting "Custom" is
-    /// cosmetic only: its tag is a placeholder (Control+Space) that must
-    /// never itself become the active hotkey, so this just flips
-    /// `isChoosingCustom` to reveal the recorder. `binding` — and therefore
-    /// the persisted preference and the live monitor — only change once
-    /// `ShortcutRecorderView` captures a real keypress and writes through
-    /// `$binding` directly. Until then the previous binding stays in effect.
+    /// The picker's selected row. Reading and writing both go through
+    /// `HotkeyPresetSelection`, which is where the "Custom" rule is enforced
+    /// and where it is tested.
     private var presetSelection: Binding<HotkeyBinding> {
         Binding(
-            get: { isChoosingCustom ? customTag : binding },
-            set: { newValue in
-                if newValue == customTag, binding.kind != .combo {
-                    isChoosingCustom = true
-                } else {
-                    isChoosingCustom = false
-                    binding = newValue
-                }
-            }
+            get: { selection.displayed },
+            set: { selection.select($0) }
+        )
+    }
+
+    /// What the recorder writes into: a real recorded keypress, which always
+    /// commits.
+    private var recordedBinding: Binding<HotkeyBinding> {
+        Binding(
+            get: { selection.binding },
+            set: { selection.commit($0) }
         )
     }
 
     /// macOS claims fn for emoji, input switching, or its own dictation unless
     /// "Press 🌐 to" is set to Do Nothing.
     private func refreshFnWarning() {
-        guard binding == .fn else {
+        guard selection.binding == .fn else {
             fnWarning = nil
             return
         }
