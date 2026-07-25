@@ -63,8 +63,10 @@ pre-warmed at app launch and kept running so `.began` → first captured sample 
 ~20ms. Publishes an RMS level stream (~30Hz) for the waveform and returns the full
 buffer on stop. Protocol-backed for tests.
 
-**`TranscriptionEngine`** — `func transcribe(_ samples: [Float]) async throws -> String`,
-plus `load()` / `unload()`. Two implementations:
+**`TranscriptionEngine`** — `func transcribe(_ audioURL: URL) async throws -> String`, plus
+`load()` / `unload()`. It takes a file rather than a sample buffer because that is what
+both frameworks want (FluidAudio `transcribe(_ url:decoderState:)`, WhisperKit
+`transcribe(audioPath:)`) and what the recorder already produces. Two implementations:
 - `ParakeetEngine` — FluidAudio (0.15.x), Parakeet TDT 0.6b v3, English.
 - `WhisperKitEngine` — WhisperKit (0.18.x), any installed Whisper model, multilingual.
 
@@ -181,8 +183,9 @@ model → pick a hotkey → optional OpenRouter key.
   shows the result.
 
 **Hotkey defaults and conflicts** — default is **right ⌥ held**. Alternatives in the
-picker: right ⌘, fn/🌐, or a custom modifier+key combo (via the `KeyboardShortcuts`
-package for that case). If the user selects fn, the app reads
+picker: right ⌘, fn/🌐, or a custom modifier+key combo. The combo recorder is a local
+`NSEvent` monitor in the settings window, which needs no extra permission and no third-party
+package. If the user selects fn, the app reads
 `defaults read com.apple.HIToolbox AppleFnUsageType` and, when it isn't `0`, offers to
 deep-link to System Settings → Keyboard → "Press 🌐 to" → *Do Nothing*, because macOS
 otherwise consumes the key.
@@ -200,8 +203,11 @@ transcription.
 ## Build and install
 
 - `xcodegen` from `project.yml`; the `.xcodeproj` is gitignored. Never open Xcode.
-- SwiftPM dependencies: FluidAudio (from 0.15.4), WhisperKit (from 0.18.0),
-  KeyboardShortcuts.
+- SwiftPM dependencies: FluidAudio (from 0.15.4) and WhisperKit (from 0.18.0). Nothing else.
+- Signed with `Developer ID Application: Jonathan Clegg (22CTWHGWQQ)`, bundle ID
+  `com.jonclegg.DogballWhisper`, no sandbox, no hardened runtime. Both are fixed
+  permanently: macOS keys Accessibility and Input Monitoring grants to the signature plus
+  bundle ID, so changing either forces the user to re-grant every permission.
 - `./scripts/build-mac.sh` — `xcodebuild` release build, local codesign, copy the `.app`
   into `/Applications`, optional `--launch`.
 - Launch at login via `SMAppService.mainApp.register()` — no helper bundle, no
