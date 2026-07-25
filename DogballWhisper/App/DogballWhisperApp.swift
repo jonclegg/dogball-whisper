@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var menuBar: MenuBarController?
     private var panel: DictationPanelController?
+    private var recorder: AudioRecorder?
     private var coordinator: DictationCoordinator?
     private var monitor: HotkeyMonitor?
     private var settings: SettingsWindowController?
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let recorder = AudioRecorder(onLevels: { levels in
             MainActor.assumeIsolated { panel.updateLevels(levels) }
         })
+        self.recorder = recorder
 
         let coordinator = DictationCoordinator(
             recorder: recorder,
@@ -68,6 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.setSetupIncomplete(!readyToLaunch)
         if readyToLaunch {
             startMonitoring()
+            // A returning launch already has mic access, so there is no
+            // permission prompt risk here. `prewarm()` itself checks
+            // authorization again and does its hardware work off the main
+            // thread, so this does not delay the rest of launch.
+            recorder.prewarm()
             Task {
                 await models.loadActiveEngine()
                 refreshActiveModelLabel()
@@ -87,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.preferences.hasCompletedOnboarding = true
                     self.menuBar?.setSetupIncomplete(false)
                     self.startMonitoring()
+                    // Mic permission was just granted as part of finishing
+                    // setup, so this is the first moment pre-warming can
+                    // actually do anything for a fresh install.
+                    self.recorder?.prewarm()
                     Task {
                         await self.models.loadActiveEngine()
                         self.refreshActiveModelLabel()

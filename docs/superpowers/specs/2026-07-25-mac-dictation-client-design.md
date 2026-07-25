@@ -58,10 +58,17 @@ bindings are matched by keycode so left and right keys are distinguished: right 
 right ⌘ = 54, fn = 63. `HotkeyBinding` is the single abstraction over
 "modifier-only key" and "modifier+key combo" so the picker has one code path.
 
-**`AudioRecorder`** — `AVAudioEngine` input tap, 16kHz mono Float32. The engine is
-pre-warmed at app launch and kept running so `.began` → first captured sample is under
-~20ms. Publishes an RMS level stream (~30Hz) for the waveform and returns the full
-buffer on stop. Protocol-backed for tests.
+**`AudioRecorder`** — `AVAudioRecorder` writing 16kHz mono 16-bit LE PCM straight to a
+WAV file. Device open and file creation are pre-armed ahead of time by calling
+`prepareToRecord()` on a not-yet-started recorder — at app launch (once mic access is
+already authorized), again after every `stop()`/`cancel()`, and again if the default
+input device changes — so `.began` → `start()` is usually just the already-prepared
+recorder's `record()` call. Preparing never engages the microphone: it does not light
+the recording indicator, and it never triggers the permission prompt (pre-warming is
+gated on authorization already being granted). If nothing is armed in time, `start()`
+prepares inline instead, exactly as it did before pre-warming existed. Publishes a
+metered level stream (~30Hz) for the waveform and returns the full recording on stop.
+Protocol-backed for tests.
 
 **`TranscriptionEngine`** — `func transcribe(_ audioURL: URL) async throws -> String`, plus
 `load()` / `unload()`. It takes a file rather than a sample buffer because that is what

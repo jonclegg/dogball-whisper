@@ -35,6 +35,39 @@ final class AudioRecorderTests: XCTestCase {
         recorder.cancel()
     }
 
+    // Pure decision logic behind `prewarm()`, exercised without touching
+    // AVAudioRecorder/AVCaptureDevice at all so it is safe to run on a
+    // machine where Core Audio hangs. `prewarm()` itself is not called here
+    // (it touches real hardware); only the guard it is built on is tested.
+    func testShouldPrewarmOnlyWhenAuthorizedAndIdle() {
+        XCTAssertTrue(
+            AudioRecorder.shouldPrewarm(authorized: true, isRecording: false, isArmed: false))
+    }
+
+    func testShouldNotPrewarmWithoutMicAuthorization() {
+        // The whole point of gating on authorization is that pre-warming must
+        // never itself trigger the permission prompt.
+        XCTAssertFalse(
+            AudioRecorder.shouldPrewarm(authorized: false, isRecording: false, isArmed: false))
+    }
+
+    func testShouldNotPrewarmWhileARecordingIsInFlight() {
+        XCTAssertFalse(
+            AudioRecorder.shouldPrewarm(authorized: true, isRecording: true, isArmed: false))
+    }
+
+    func testShouldNotPrewarmWhenAlreadyArmed() {
+        // Idempotency: a second prewarm while one is already prepared is a
+        // no-op rather than replacing (and leaking the file of) the first.
+        XCTAssertFalse(
+            AudioRecorder.shouldPrewarm(authorized: true, isRecording: false, isArmed: true))
+    }
+
+    func testShouldNotPrewarmWhenBothUnauthorizedAndBusy() {
+        XCTAssertFalse(
+            AudioRecorder.shouldPrewarm(authorized: false, isRecording: true, isArmed: true))
+    }
+
     // Guards the contract the engines depend on: a real 16kHz mono WAV on disk.
     // Needs mic permission, so it is opt-in: RUN_AUDIO_IT=1 ./scripts/test.sh
     func testRecordsA16kMonoWavFile() async throws {

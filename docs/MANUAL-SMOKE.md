@@ -209,8 +209,13 @@ this, so measure it here, on the active model you actually ship with.
       the one a new user sees first
 - [ ] **(never verified)** No clipped first word: press the key and start
       talking immediately, with no pause. The first word is in the transcript.
-      Recording starts before the panel animates, so it should be, but the
-      microphone's own warm-up is the risk here
+      `AudioRecorder` pre-arms the next recording with `prepareToRecord()` at
+      launch and after every dictation, so `start()` should just be a
+      `record()` call on already-opened hardware; this is the only way to
+      confirm that actually removes the clip, since nothing in the test
+      suite can touch the real microphone. If the first word is missing,
+      check whether a prepared recorder was actually available (see
+      `AudioRecorder.prewarm()`) or whether it fell back to preparing inline
 
 ## 10. Microphone integration test
 
