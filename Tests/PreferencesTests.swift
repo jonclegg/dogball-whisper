@@ -53,4 +53,12 @@ final class PreferencesTests: XCTestCase {
         prefs.cleanupModelID = "  "
         XCTAssertEqual(prefs.cleanupModelID, Preferences.defaultCleanupModelID)
     }
+
+    func testHotkeyBindingDefaultsToRightOptionAndRoundTrips() {
+        let prefs = Preferences(defaults: defaults)
+        XCTAssertEqual(prefs.hotkeyBinding, .rightOption)
+
+        prefs.hotkeyBinding = .fn
+        XCTAssertEqual(Preferences(defaults: defaults).hotkeyBinding, .fn)
+    }
 }

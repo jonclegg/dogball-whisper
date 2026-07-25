@@ -76,6 +76,16 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.hotkeyBinding) }
     }
 
+    var hotkeyBinding: HotkeyBinding {
+        get {
+            guard let data = hotkeyBindingData,
+                  let binding = try? JSONDecoder().decode(HotkeyBinding.self, from: data)
+            else { return .rightOption }
+            return binding
+        }
+        set { hotkeyBindingData = try? JSONEncoder().encode(newValue) }
+    }
+
     /// Blank values would silently turn cleanup into a passthrough, so an
     /// empty or whitespace-only stored value reads back as the default.
     private func nonBlank(_ key: String, default fallback: String) -> String {
