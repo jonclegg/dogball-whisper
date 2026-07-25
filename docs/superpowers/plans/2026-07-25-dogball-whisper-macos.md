@@ -241,7 +241,11 @@ echo "Installed /Applications/Dogball Whisper.app"
 
 codesign --verify --strict "/Applications/Dogball Whisper.app"
 
-$LAUNCH && open "/Applications/Dogball Whisper.app"
+# An `$LAUNCH && open ...` one-liner here would make the no-flag invocation
+# exit 1, because `false` would be the last command the script ran.
+if [[ "$LAUNCH" == true ]]; then
+  open "/Applications/Dogball Whisper.app"
+fi
 ```
 
 `scripts/test.sh`:
