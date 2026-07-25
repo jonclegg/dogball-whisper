@@ -19,4 +19,16 @@ final class MenuBarController {
         )
         statusItem.menu = menu
     }
+
+    func update(state: DictationState) {
+        let symbol: String
+        switch state {
+        case .idle, .notice: symbol = "mic"
+        case .recording: symbol = "mic.fill"
+        case .transcribing, .polishing: symbol = "waveform"
+        case .failed: symbol = "exclamationmark.triangle"
+        }
+        statusItem.button?.image = NSImage(
+            systemSymbolName: symbol, accessibilityDescription: "Dogball Whisper")
+    }
 }
