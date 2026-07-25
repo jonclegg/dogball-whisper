@@ -9,20 +9,31 @@ final class ParakeetEngine: TranscriptionEngine {
     private(set) var isLoaded = false
 
     private var manager: AsrManager?
-    private let onDownloadProgress: (Double) -> Void
+    private let onDownloadProgress: @Sendable (Double) -> Void
+    private let loadOnce = LoadOnce<AsrManager>()
 
-    init(onDownloadProgress: @escaping (Double) -> Void = { _ in }) {
+    init(onDownloadProgress: @escaping @Sendable (Double) -> Void = { _ in }) {
         self.onDownloadProgress = onDownloadProgress
     }
 
+    /// Downloads the model (if needed) and loads it. Safe to call
+    /// concurrently — e.g. once from the dictation coordinator and once from
+    /// the settings model manager — because `LoadOnce` makes every caller
+    /// await the same in-flight run instead of racing two downloads onto the
+    /// same on-disk partial file. `manager` and `isLoaded` are only set
+    /// together, and only after the run succeeds; a thrown error leaves both
+    /// untouched so a later call retries.
     func load() async throws {
-        guard !isLoaded else { return }
-        if !ModelMirror.isComplete() {
-            try await ModelMirror.download(onProgress: onDownloadProgress)
+        let onDownloadProgress = onDownloadProgress
+        let manager = try await loadOnce.run {
+            if !ModelMirror.isComplete() {
+                try await ModelMirror.download(onProgress: onDownloadProgress)
+            }
+            let models = try await AsrModels.downloadAndLoad()
+            let manager = AsrManager(config: .default)
+            try await manager.loadModels(models)
+            return manager
         }
-        let models = try await AsrModels.downloadAndLoad()
-        let manager = AsrManager(config: .default)
-        try await manager.loadModels(models)
         self.manager = manager
         isLoaded = true
     }
