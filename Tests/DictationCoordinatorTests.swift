@@ -193,6 +193,8 @@ final class DictationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(inserter.inserted.isEmpty)
         XCTAssertTrue(presenter.states.contains(.notice("No speech")))
+        // The resting state, not just the transient presenter callback.
+        XCTAssertEqual(coordinator.state, .notice("No speech"))
     }
 
     func testTranscriptionFailureIsSurfaced() async {
@@ -202,6 +204,8 @@ final class DictationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(inserter.inserted.isEmpty)
         XCTAssertTrue(presenter.states.contains(where: { if case .failed = $0 { return true }; return false }))
+        // The resting state, not just the transient presenter callback.
+        XCTAssertEqual(coordinator.state, .failed(TranscriptionError.notLoaded.localizedDescription))
     }
 
     func testMissingEngineFailsWithAnActionableMessage() async {
@@ -221,6 +225,54 @@ final class DictationCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             coordinator.state,
             .failed(TranscriptionError.noModelInstalled.localizedDescription))
+        XCTAssertEqual(presenter.dismissCount, 1)
+    }
+
+    // A denied microphone (or any other recorder.start() failure) must
+    // surface as a failure, not crash or hang silently.
+    func testStartFailureIsSurfacedAsAFailure() async {
+        struct MicDenied: LocalizedError {
+            var errorDescription: String? { "Microphone access denied." }
+        }
+        recorder.startError = MicDenied()
+        let coordinator = makeCoordinator()
+
+        coordinator.handle(.began)
+        await coordinator.waitForWork()
+
+        XCTAssertEqual(recorder.startCount, 0)
+        XCTAssertEqual(coordinator.state, .failed("Microphone access denied."))
+    }
+
+    // A resting .failed display must not lock out the next dictation: this
+    // is the one real-world scenario a first run is likely to hit (model
+    // not installed yet), and it must recover without a relaunch.
+    func testFailureDoesNotBlockTheNextDictation() async {
+        var engineAvailable = false
+        let coordinator = DictationCoordinator(
+            recorder: recorder,
+            engineProvider: { [engine] in engineAvailable ? engine : nil },
+            inserter: inserter,
+            cleaner: nil,
+            presenter: presenter,
+            preferences: prefs,
+            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
+        )
+
+        coordinator.handle(.began)
+        await coordinator.waitForWork()
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(TranscriptionError.noModelInstalled.localizedDescription))
+        XCTAssertEqual(recorder.startCount, 0)
+
+        engineAvailable = true
+        coordinator.handle(.began)
+        coordinator.handle(.ended)
+        await coordinator.waitForWork()
+
+        XCTAssertEqual(recorder.startCount, 1)
+        XCTAssertEqual(inserter.inserted.count, 1)
     }
 
     func testFocusChangeReportsThatTheTextWasCopiedInstead() async {
@@ -229,6 +281,8 @@ final class DictationCoordinatorTests: XCTestCase {
         await dictate(coordinator)
 
         XCTAssertTrue(presenter.states.contains(.notice("Copied to clipboard")))
+        // The resting state, not just the transient presenter callback.
+        XCTAssertEqual(coordinator.state, .notice("Copied to clipboard"))
     }
 
     // Escape after release abandons transcription or cleanup that is already
@@ -263,5 +317,39 @@ final class DictationCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(recorder.startCount, 1)
         XCTAssertEqual(inserter.inserted.count, 1)
+    }
+
+    // isBusy must also hold during cleanup, not just transcription.
+    func testTriggeringAgainWhileBusyDuringCleanupIsIgnored() async {
+        cleaner.delay = 0.2
+        let coordinator = makeCoordinator(
+            cleaner: cleaner,
+            config: .init(minimumDuration: 0.3, cleanupTimeout: 1))
+        coordinator.handle(.began)
+        coordinator.handle(.ended)
+
+        // Give the pipeline a moment to reach .polishing before trying again.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(coordinator.state, .polishing)
+
+        coordinator.handle(.began)  // ignored: still polishing
+        await coordinator.waitForWork()
+
+        XCTAssertEqual(recorder.startCount, 1)
+        XCTAssertEqual(inserter.inserted.count, 1)
+    }
+
+    // The temp WAV must be deleted on every exit path; this proves it for
+    // the ordinary success path against a file that actually exists.
+    func testTempWavIsDeletedAfterASuccessfulDictation() async {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dogball-coordinator-\(UUID().uuidString).wav")
+        FileManager.default.createFile(atPath: url.path, contents: Data("fake audio".utf8))
+        recorder.nextResult = RecordedAudio(url: url, duration: 2)
+
+        let coordinator = makeCoordinator()
+        await dictate(coordinator)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 }

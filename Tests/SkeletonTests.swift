@@ -1,6 +1,7 @@
 import XCTest
 @testable import DogballWhisper
 
+@MainActor
 final class SkeletonTests: XCTestCase {
     func testMenuBarControllerCreatesAStatusItemWithAMenu() {
         let controller = MenuBarController()

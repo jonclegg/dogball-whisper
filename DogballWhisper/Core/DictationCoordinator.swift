@@ -12,7 +12,9 @@ enum DictationState: Equatable {
     case notice(String)
 }
 
-protocol TextCleaning {
+/// Runs off the main actor (a task-group child inside `cleanIfEnabled`), so
+/// a conforming type must be safe to invoke from another isolation domain.
+protocol TextCleaning: Sendable {
     func clean(_ text: String, prompt: String, model: String) async throws -> String
 }
 
@@ -55,6 +57,17 @@ final class DictationCoordinator {
     private var location: CaretLocation = .unknown
     private var work: Task<Void, Never>?
 
+    /// Identifies the in-flight `finish()` pipeline. `abort()` bumps this
+    /// whenever it gives up on transcription/cleanup, so a `finish()` that
+    /// resumes later — because the engine never observed cancellation, for
+    /// instance — can tell it is an orphan and touch nothing rather than
+    /// racing whatever pipeline has started since.
+    private var generation = 0
+
+    /// The task, if any, that will return a resting `.failed`/`.notice`
+    /// state to `.idle` after the presenter's own dismiss delay.
+    private var terminalResetTask: Task<Void, Never>?
+
     init(
         recorder: AudioRecording,
         engineProvider: @escaping EngineProvider,
@@ -83,10 +96,18 @@ final class DictationCoordinator {
 
     /// Escape after release: give up on transcription or cleanup already in
     /// flight. Nothing is inserted and nothing is reported as an error.
+    ///
+    /// Recovery cannot wait on the engine or cleaner cooperating with
+    /// cancellation — a hung `transcribe` call may never observe it — so
+    /// this resets the UI immediately instead of leaving that to whatever
+    /// `finish()` eventually notices. Bumping `generation` here is what lets
+    /// a late-resuming `finish()` recognize it is stale.
     func abort() {
         switch state {
         case .transcribing, .polishing:
+            generation += 1
             work?.cancel()
+            abandon()
         case .recording:
             cancel()
         case .idle, .failed, .notice:
@@ -109,13 +130,16 @@ final class DictationCoordinator {
     }
 
     private func begin() {
+        // A fresh press supersedes whatever resting failure/notice is being
+        // shown; nothing should reset state out from under the dictation
+        // that is about to start.
+        terminalResetTask?.cancel()
+
         // A prior failure or notice is a resting, non-busy display, not a
         // lock: only active recording/transcription/cleanup should block a
         // fresh press. Requiring exact `.idle` here would leave the
-        // coordinator stuck after the first error until something else
-        // reset it, since `fail`/`notice` no longer force a synchronous
-        // return to `.idle` (that reset would race the very presenter
-        // display the state was set for).
+        // coordinator stuck after the first error until the terminal-reset
+        // timer got around to firing.
         guard !isBusy else { return }
         guard engineProvider() != nil else {
             fail(TranscriptionError.noModelInstalled.localizedDescription)
@@ -153,14 +177,22 @@ final class DictationCoordinator {
             return
         }
 
+        generation += 1
+        let token = generation
         state = .transcribing
         work = Task { [weak self] in
-            await self?.finish(audio: audio)
+            await self?.finish(audio: audio, token: token)
         }
     }
 
-    private func finish(audio: RecordedAudio) async {
+    private func finish(audio: RecordedAudio, token: Int) async {
         defer { try? FileManager.default.removeItem(at: audio.url) }
+
+        // Covers cancellation observed before the engine's first suspension
+        // point (esc pressed between `end()` and the first `await`), and a
+        // token already invalidated by `abort()`. Either way, `abort()`
+        // already reset the UI synchronously, so this only needs to return.
+        guard isCurrent(token), !Task.isCancelled else { return }
 
         guard let engine = engineProvider() else {
             fail(TranscriptionError.noModelInstalled.localizedDescription)
@@ -171,22 +203,16 @@ final class DictationCoordinator {
         do {
             if !engine.isLoaded { try await engine.load() }
             transcript = try await engine.transcribe(audio.url)
-        } catch is CancellationError {
-            abandon()
-            return
         } catch {
-            if Task.isCancelled {
-                abandon()
-            } else {
-                fail(error.localizedDescription)
-            }
+            // A stale pipeline (superseded or aborted while awaiting the
+            // engine) must not report a failure for work nobody asked to
+            // see the result of anymore; `abort()` already handled the UI.
+            guard isCurrent(token) else { return }
+            fail(error.localizedDescription)
             return
         }
 
-        guard !Task.isCancelled else {
-            abandon()
-            return
-        }
+        guard isCurrent(token) else { return }
 
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -196,11 +222,9 @@ final class DictationCoordinator {
 
         let finalText = await cleanIfEnabled(trimmed)
 
-        // One last check: aborting during cleanup must not paste anything.
-        guard !Task.isCancelled else {
-            abandon()
-            return
-        }
+        // One last check: aborting during cleanup, or a new pipeline having
+        // started since, must not paste anything.
+        guard isCurrent(token) else { return }
 
         let outcome = inserter.insert(
             finalText, targetPID: location.pid, mode: preferences.insertionMode)
@@ -213,6 +237,10 @@ final class DictationCoordinator {
             notice("Copied to clipboard")
         }
     }
+
+    /// Whether `token` still names the current pipeline. False once a new
+    /// dictation has started or `abort()` has given up on this one.
+    private func isCurrent(_ token: Int) -> Bool { token == generation }
 
     /// Cleanup is best-effort by design: any failure, timeout, or missing key
     /// falls through to the raw transcript rather than losing the dictation.
@@ -237,36 +265,38 @@ final class DictationCoordinator {
     }
 
     /// Leaves `state` at `.failed` so the caller (and tests) can observe it;
-    /// `begin()` treats it as non-busy, so the next press starts cleanly
-    /// without needing a synchronous, racy reset back to `.idle` here.
+    /// `begin()` treats it as non-busy, so the next press starts cleanly.
+    /// A cancellable timer returns it to `.idle` after the same delay the
+    /// presenter uses to dismiss its display, so an unattended failure does
+    /// not sit in the menu bar forever.
     private func fail(_ message: String) {
         state = .failed(message)
         presenter.dismiss(after: config.noticeDismissDelay)
+        scheduleTerminalReset()
     }
 
-    /// See `fail(_:)`: leaves `state` at `.notice` rather than forcing it
-    /// back to `.idle` synchronously.
+    /// See `fail(_:)`: leaves `state` at `.notice` and schedules the same
+    /// cancellable return to `.idle`.
     private func notice(_ message: String) {
         state = .notice(message)
         presenter.dismiss(after: config.noticeDismissDelay)
+        scheduleTerminalReset()
     }
-}
 
-struct TimedOutError: Error {}
-
-/// Runs `operation`, giving up after `seconds`.
-func withTimeout<T: Sendable>(
-    seconds: TimeInterval,
-    operation: @escaping @Sendable () async throws -> T
-) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw TimedOutError()
+    /// Returns `state` to `.idle` after `config.noticeDismissDelay`, but
+    /// only if it is still the same resting value this call captured — a
+    /// fresh press (which cancels this task) or another terminal state
+    /// arriving first must not be clobbered.
+    private func scheduleTerminalReset() {
+        terminalResetTask?.cancel()
+        let restingState = state
+        let delay = config.noticeDismissDelay
+        terminalResetTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            if self.state == restingState {
+                self.state = .idle
+            }
         }
-        guard let result = try await group.next() else { throw TimedOutError() }
-        group.cancelAll()
-        return result
     }
 }

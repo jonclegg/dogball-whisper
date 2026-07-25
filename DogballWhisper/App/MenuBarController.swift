@@ -1,6 +1,7 @@
 import AppKit
 
 /// Owns the status-bar item. Task 7 gives it live dictation state.
+@MainActor
 final class MenuBarController {
     let statusItem: NSStatusItem
 
