@@ -105,10 +105,12 @@ rebuilding it for each one.
       Secure Keyboard Entry (or focus a password field and ⌘-Tab away while
       it is still focused) and dictate into TextEdit. Expect a refusal, and
       note it: this is the known false-positive of the secure-event-input
-      check. `log show --last 5m --predicate 'subsystem ==
-      "com.jonclegg.DogballWhisper"' --info` shows "dictation refused:
-      secure event input", which is how a stuck refusal is told apart from
-      a real password field
+      check. With verbose diagnostics on (see section 6),
+      `log show --last 5m --predicate 'subsystem ==
+      "com.jonclegg.DogballWhisper"'` shows "dictation refused: secure event
+      input", which is how a stuck refusal is told apart from a real password
+      field. Without the flag that line is absent by design, so turn it on
+      before trying to diagnose this
 - [ ] Rebind to right ⌘ in Settings and confirm it works without a relaunch
 - [ ] Rebind to a custom combo (⌃⇧D) and confirm the keystroke does not
       reach the app you were typing in
@@ -134,6 +136,14 @@ the same apps.
 - [ ] Terminal: text lands at the prompt
 - [ ] Slack or Discord message box: text lands, no stray newline sent
 - [ ] Browser text field (Chrome or Safari): text lands
+- [ ] **(never verified)** Secure input arriving mid-dictation: start
+      dictating into TextEdit, and while the panel still says "Transcribing"
+      or "Polishing", get secure input engaged (turn on Terminal > Secure
+      Keyboard Entry, or trigger an auth sheet). Nothing is pasted, the panel
+      says the text was copied to the clipboard, and ⌘V afterwards pastes it.
+      The failure this replaces was silent: the keystroke swallowed, the
+      panel dismissed as if it had worked, and the clipboard restored 150ms
+      later so the text was gone for good
 - [ ] **(never verified)** Focus-change gate: start dictating into TextEdit,
       then ⌘-Tab to another app *before* releasing the key. Nothing is pasted
       into the app you switched to, the panel says the text was copied to the
@@ -190,8 +200,11 @@ the same apps.
       zoom a few native AppKit windows (Finder, TextEdit, System Settings)
       and use any window manager you normally do. Nothing should resize in
       steps, lag, or fight back. `AXEnhancedUserInterface` is the flag that
-      causes that, and it is now only ever set on Chromium/Electron bundles
-      or on an app that answered nothing at all
+      causes that, it is never unset once set, and it is now only ever sent
+      to a bundle that looks Chromium/Electron — every call site checks.
+      Worth doing after deliberately dictating with Finder on the desktop and
+      with Preview showing a PDF frontmost, which answer "nothing focused"
+      and used to be nudged for it
 - [ ] A field where no rect at all is available: panel falls back to bottom
       center rather than to some earlier bad position, and nothing traps
 - [ ] Caret near the top of the screen: panel flips below it instead of
@@ -214,6 +227,53 @@ the same apps.
       cleanup timeout)
 - [ ] Cleanup toggled off: raw transcript inserts immediately
 - [ ] Settings > Cleanup > Test returns cleaned sample text
+- [ ] Test with a deliberately wrong model ID: the result line names the
+      status code and what to check, and does not paste back the provider's
+      raw response body
+- [ ] "Use the developer prompt" fills the editor with the version that fixes
+      technical terms, "Reset to default" puts the neutral one back, and the
+      one showing when you close Settings is the one used on the next
+      dictation
+
+### Revoking the API key
+
+The only way a user can stop sending dictated text to a third party, so
+treat a key that survives this as a blocker rather than a nit.
+
+- [ ] Settings > Cleanup, select the whole API key field and delete it, wait
+      a second, then close Settings. Reopen Settings: the field is still
+      empty. `security find-generic-password -s com.jonclegg.DogballWhisper
+      -a openrouter-api-key` reports "could not be found"
+- [ ] Dictate afterwards: the raw transcript inserts, and no request is made
+      to OpenRouter
+- [ ] Paste a key back in and ⌘W the window immediately, without pausing:
+      the key is saved anyway (the write is debounced, and closing the window
+      flushes it). Reopen Settings and confirm it is there
+- [ ] **(never verified)** Run setup again ("Finish setup…" in the menu, or
+      after `defaults delete com.jonclegg.DogballWhisper`) with a key already
+      stored: the field is prefilled. Clear it and press "Start dictating" —
+      the key is deleted. Leave it alone and press "Start dictating" — the
+      key survives, which is the bug an earlier version had in the other
+      direction
+
+### Verbose diagnostics
+
+Per-dictation logging is off in a shipped build on purpose: at `notice` with
+`.public` those lines persist in the system log store for days, and one line
+per dictation records when someone dictated, how much they said, and where
+their caret was.
+
+- [ ] With the flag off (the default), dictate a few times, then
+      `log show --last 5m --predicate 'subsystem ==
+      "com.jonclegg.DogballWhisper"'`: no caret rects, no character counts,
+      no "paste: posting command-V", and no "dictation refused" lines
+- [ ] Turn it on, quit and relaunch the app (the flag is read once at
+      launch), dictate again, and confirm the same query now shows the caret
+      tier, the raw/final character counts, and the cleanup timing:
+
+          defaults write com.jonclegg.DogballWhisper verboseDiagnostics -bool YES
+
+- [ ] Turn it back off with `-bool NO` and relaunch
 
 ## 7. Models
 

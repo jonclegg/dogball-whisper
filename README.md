@@ -19,6 +19,13 @@ Input Monitoring is listed as optional and is usually unnecessary.
     ./scripts/build-mac.sh [--launch]   # builds Release, signs, installs to /Applications
     ./scripts/test.sh [filter]          # unit tests, optional -only-testing filter
                                          # e.g. ./scripts/test.sh DogballWhisperTests/HotkeyMatcherTests
+    ./scripts/release-macos.sh v1.2.3 [--dry-run]   # notarize, staple, publish
+
+A local `build-mac.sh` build reports version 0.0.0. Only the release script
+stamps a real version, taken from the tag, and it refuses a tag that is not
+greater than every tag that already exists — with no auto-update and no
+crash reporting, the version string is the only way to tell which build a
+bug report is about.
 
 Never open Xcode: `project.yml` plus `xcodegen` owns the project file, which
 is gitignored. Both scripts run `xcodegen generate` first, so a new source
@@ -53,18 +60,57 @@ CI.
 
 ## Permissions
 
-Microphone and Input Monitoring are required. Accessibility is optional but
-strongly recommended: without it, text is copied to the clipboard instead
-of pasted, and the waveform panel sits at a fixed position instead of
-following your caret.
+Microphone and Accessibility are required. Accessibility carries three
+things: the event tap that sees the hotkey, the caret query that positions
+the panel, and the synthetic ⌘V that pastes.
 
-Granting Input Monitoring makes macOS offer to quit and reopen the app; the
-event tap only works after that relaunch.
+Input Monitoring is optional and usually unnecessary. A session event tap
+runs on the Accessibility grant, and macOS will not even list an app under
+Input Monitoring until it has installed a tap. If you do grant it, macOS
+offers to quit and reopen the app.
 
 Bundle ID (`com.jonclegg.DogballWhisper`) and signing identity
 (`Developer ID Application: Jonathan Clegg (22CTWHGWQQ)`) are fixed on
 purpose. macOS keys Accessibility and Input Monitoring grants to both, so
 changing either forces every user to re-grant everything.
+
+## Cleanup prompts
+
+The shipped prompt removes disfluencies and fixes punctuation and
+capitalization, and nothing else: it says nothing about what you are
+dictating about, because anything domain-specific rewrites words you
+actually said.
+
+Settings > Cleanup also offers a developer preset, which additionally fixes
+technical terms the speech model mishears:
+
+> Remove filler words, false starts, stutters, and repeated words. Fix
+> punctuation and capitalization. The speaker is a developer: fix misheard
+> technical terms ("Maine" is "main", "guess" is "git"). Do not rephrase or
+> add anything. Return only the cleaned text.
+
+The prompt is a plain text field, so that pattern adapts to any field with
+its own vocabulary. Keep it short: it is read by the model on every
+dictation, between letting go of the key and the text appearing.
+
+Cleanup only happens if you supply an OpenRouter key, and only your
+transcribed text is ever sent. To stop it, clear the API key field in
+Settings > Cleanup: an empty field deletes the stored key rather than
+leaving it in the Keychain.
+
+## Diagnostics
+
+Failures are always logged. Per-dictation detail (caret position, character
+counts, cleanup timings) is off, because those lines persist in the system
+log store for days and would record when you dictated and how much you said.
+Turn it on only while chasing something:
+
+    defaults write com.jonclegg.DogballWhisper verboseDiagnostics -bool YES
+    # quit and reopen the app, reproduce, then:
+    log show --last 10m --predicate 'subsystem == "com.jonclegg.DogballWhisper"'
+    defaults write com.jonclegg.DogballWhisper verboseDiagnostics -bool NO
+
+Neither level ever logs what you said, the cleaned text, or your API key.
 
 ## Models
 
@@ -94,7 +140,7 @@ granularity, managed by `Transcribe/ModelManager.swift`.
 
 ## Docs
 
-- `docs/superpowers/specs/` - the original design doc
+- `docs/superpowers/specs/` - the design doc, kept current with the app
 - `docs/superpowers/plans/` - the implementation plan this was built from
 - `docs/MANUAL-SMOKE.md` - the pre-ship checklist for everything the test
   suite cannot verify by itself
