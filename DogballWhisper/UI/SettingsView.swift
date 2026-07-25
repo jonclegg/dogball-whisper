@@ -153,6 +153,10 @@ private struct ModelsSettingsTab: View {
         }
     }
 
+    /// Every control is gated on `models.isBusy`, which covers activation as
+    /// well as downloading: loading a large model takes seconds, and an
+    /// enabled "Use" or "Delete" during that window would start a second
+    /// activation or pull files out from under the one already running.
     @ViewBuilder
     private func controls(for descriptor: ModelDescriptor) -> some View {
         switch models.state(for: descriptor) {
@@ -162,14 +166,21 @@ private struct ModelsSettingsTab: View {
         case let .downloading(fraction):
             ProgressView(value: fraction).frame(width: 90)
         case .installed:
-            HStack(spacing: 8) {
-                Button("Use") { Task { try? await models.makeActive(descriptor) } }
-                Button("Delete") { try? models.delete(descriptor) }
+            if models.activatingModelID == descriptor.id {
+                ProgressView().controlSize(.small)
+            } else {
+                HStack(spacing: 8) {
+                    Button("Use") { Task { try? await models.makeActive(descriptor) } }
+                        .disabled(models.isBusy)
+                    Button("Delete") { try? models.delete(descriptor) }
+                        .disabled(models.isBusy)
+                }
             }
         case .active:
             HStack(spacing: 8) {
                 Text("Active").foregroundStyle(.secondary)
                 Button("Delete") { try? models.delete(descriptor) }
+                    .disabled(models.isBusy)
             }
         }
     }

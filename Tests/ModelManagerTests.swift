@@ -164,7 +164,12 @@ final class ModelManagerTests: XCTestCase {
         }
         XCTAssertTrue(manager.isBusy)
 
-        try? await manager.install(whisperLarge)
+        do {
+            try await manager.install(whisperLarge)
+            XCTFail("a refused install must not look like a successful one")
+        } catch {
+            XCTAssertEqual(error as? ModelManagerError, .installInProgress)
+        }
         XCTAssertNil(
             factory.latest(whisperLarge.id),
             "a second install must not even construct an engine while one is in flight")
@@ -315,6 +320,114 @@ final class ModelManagerTests: XCTestCase {
             manager.activeModelID,
             "if even the rollback reload fails there is no active model, so the selection must not dangle")
         XCTAssertNil(manager.activeEngine)
+    }
+
+    // MARK: One activation at a time
+
+    // Activating a large model takes seconds. Two overlapping calls would both
+    // unload, both build an engine, and both write activeEngine/activeModelID,
+    // so one call's rollback could clear a selection the other just committed.
+    func testSecondMakeActiveWhileOneIsInFlightIsRefused() async throws {
+        let gate = Gate()
+        factory.gateForID[whisperLarge.id] = gate
+        installed.ids.insert(whisperLarge.id)
+        let manager = makeManager()
+
+        let firstActivation = Task { try await manager.makeActive(whisperLarge) }
+        var attempts = 0
+        // Wait until the activation is really under way (its engine exists and
+        // is parked on the gate), not merely scheduled.
+        while factory.latest(whisperLarge.id) == nil && attempts < 200 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+            attempts += 1
+        }
+        XCTAssertTrue(manager.isBusy)
+        XCTAssertEqual(manager.activatingModelID, whisperLarge.id)
+
+        do {
+            try await manager.makeActive(whisperLarge)
+            XCTFail("a second activation must not run while one is in flight")
+        } catch {
+            XCTAssertEqual(error as? ModelManagerError, .activationInProgress)
+        }
+        XCTAssertEqual(
+            factory.createdEngines[whisperLarge.id]?.count, 1,
+            "a second activation must not even construct an engine while one is in flight")
+        // Deleting under a loading engine would remove its files mid-load.
+        XCTAssertThrowsError(try manager.delete(whisperLarge)) { error in
+            XCTAssertEqual(error as? ModelManagerError, .activationInProgress)
+        }
+
+        await gate.open()
+        try await firstActivation.value
+
+        // Coherence: the selection names a model whose engine really is loaded.
+        XCTAssertFalse(manager.isBusy)
+        XCTAssertNil(manager.activatingModelID)
+        XCTAssertEqual(manager.activeModelID, whisperLarge.id)
+        XCTAssertTrue(manager.activeEngine === factory.latest(whisperLarge.id))
+        XCTAssertEqual(manager.activeEngine?.isLoaded, true)
+    }
+
+    // MARK: Error reporting
+
+    // A stale error next to an "Installed" state reads as though something is
+    // still broken — in onboarding, right above a now-enabled "Start
+    // dictating" button.
+    func testASuccessfulRetryClearsTheErrorFromTheFailedAttempt() async throws {
+        let manager = makeManager()
+        factory.errorForID[whisperTiny.id] = FakeLoadError()
+
+        do {
+            try await manager.install(whisperTiny)
+            XCTFail("expected the load failure to propagate")
+        } catch {}
+        XCTAssertNotNil(manager.lastError)
+
+        factory.errorForID[whisperTiny.id] = nil
+        try await manager.install(whisperTiny)
+
+        XCTAssertNil(manager.lastError, "a successful retry must not leave the old error on screen")
+        XCTAssertEqual(manager.activeModelID, whisperTiny.id)
+    }
+
+    // MARK: Loading the active engine
+
+    func testLoadActiveEngineDoesNotReloadTheModelItAlreadyHasResident() async throws {
+        let manager = makeManager()
+        try await manager.install(whisperTiny)
+        installed.ids.insert(whisperTiny.id)
+        let active = try XCTUnwrap(factory.latest(whisperTiny.id))
+
+        await manager.loadActiveEngine()
+
+        XCTAssertEqual(
+            factory.createdEngines[whisperTiny.id]?.count, 2,
+            "the resident engine must be reused, not replaced by a third load")
+        XCTAssertTrue(manager.activeEngine === active)
+        XCTAssertEqual(active.loadCount, 1)
+    }
+
+    // Only one model's weights may ever be resident, so a real reload has to
+    // unload the outgoing engine before it loads the incoming one.
+    func testLoadActiveEngineUnloadsAnOutgoingEngineFirst() async throws {
+        let manager = makeManager()
+        try await manager.install(whisperTiny)
+        installed.ids.insert(whisperTiny.id)
+        installed.ids.insert(whisperLarge.id)
+        let stale = try XCTUnwrap(factory.latest(whisperTiny.id))
+
+        // The selection changes underneath the manager (as a preferences
+        // reset or an external write would do), so the resident engine is no
+        // longer the right one.
+        prefs.activeModelID = whisperLarge.id
+        await manager.loadActiveEngine()
+
+        let loaded = try XCTUnwrap(factory.latest(whisperLarge.id))
+        let unloadIndex = try XCTUnwrap(factory.log.events.firstIndex(of: "unloaded:\(stale.id)"))
+        let loadIndex = try XCTUnwrap(factory.log.events.firstIndex(of: "loaded:\(loaded.id)"))
+        XCTAssertLessThan(unloadIndex, loadIndex)
+        XCTAssertTrue(manager.activeEngine === loaded)
     }
 
     // MARK: Progress

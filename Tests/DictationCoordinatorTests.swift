@@ -301,6 +301,33 @@ final class DictationCoordinatorTests: XCTestCase {
         XCTAssertEqual(inserter.inserted.count, 1)
     }
 
+    // `state`'s didSet suppresses equal values, so a second press that fails
+    // identically to the first would show nothing while still arming the
+    // dismiss timer: a timer with no display to dismiss. `begin()` forces a
+    // transition through .idle to prevent that; this is the regression guard,
+    // since the bug shipped once already.
+    func testARepeatedIdenticalFailureStillReachesThePresenter() async {
+        let coordinator = DictationCoordinator(
+            recorder: recorder,
+            engineProvider: { nil },
+            inserter: inserter,
+            cleaner: nil,
+            presenter: presenter,
+            preferences: prefs,
+            config: .init(minimumDuration: 0.3, cleanupTimeout: 0.2)
+        )
+
+        coordinator.handle(.began)
+        coordinator.handle(.began)
+        await coordinator.waitForWork()
+
+        let expected = DictationState.failed(TranscriptionError.noModelInstalled.localizedDescription)
+        XCTAssertEqual(
+            presenter.states.filter { $0 == expected }.count, 2,
+            "both identical failures must be presented, not just the first")
+        XCTAssertEqual(presenter.dismissCount, 2)
+    }
+
     func testFocusChangeReportsThatTheTextWasCopiedInstead() async {
         inserter.outcome = .copiedToClipboard
         let coordinator = makeCoordinator()

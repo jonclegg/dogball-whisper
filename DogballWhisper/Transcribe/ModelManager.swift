@@ -3,11 +3,17 @@ import Observation
 
 enum ModelManagerError: LocalizedError, Equatable {
     case deletingWhileInstalling
+    case installInProgress
+    case activationInProgress
 
     var errorDescription: String? {
         switch self {
         case .deletingWhileInstalling:
             return "This model is currently downloading. Wait for it to finish before deleting it."
+        case .installInProgress:
+            return "Another model is downloading. Wait for it to finish before starting another one."
+        case .activationInProgress:
+            return "Another model is loading. Wait for it to finish before switching models."
         }
     }
 }
@@ -29,10 +35,21 @@ final class ModelManager {
     private(set) var activeEngine: TranscriptionEngine?
     private(set) var lastError: String?
 
+    /// The model being switched to, present only while `makeActive` is
+    /// loading it, so the UI can show a spinner on that row.
+    private(set) var activatingModelID: String?
+
     private let preferences: Preferences
     private let engineFactory: EngineFactory
     private let isInstalled: InstallCheck
     private var installTask: Task<Void, Error>?
+    private var activationTask: Task<Void, Error>?
+
+    /// The model whose weights `activeEngine` holds, kept in lockstep with it
+    /// so `loadActiveEngine()` can tell a redundant reload from a real one.
+    /// Not the same thing as `activeModelID`, which is the persisted
+    /// selection and is only written once a load has succeeded.
+    private var loadedEngineID: String?
 
     init(
         preferences: Preferences,
@@ -48,7 +65,10 @@ final class ModelManager {
         preferences.activeModelID
     }
 
-    var isBusy: Bool { installTask != nil }
+    /// True while a download or an activation is in flight. Both hold the
+    /// model list still: a second install, a second activation, or a delete
+    /// underneath either one would race the work already running.
+    var isBusy: Bool { installTask != nil || activationTask != nil }
 
     func state(for descriptor: ModelDescriptor) -> ModelInstallState {
         ModelCatalog.state(
@@ -56,8 +76,16 @@ final class ModelManager {
             isInstalled: isInstalled)
     }
 
+    /// Downloads a model, then makes it active if nothing else is.
+    ///
+    /// Throws `.installInProgress`/`.activationInProgress` rather than
+    /// returning quietly when the manager is busy: returning normally would be
+    /// indistinguishable from success to a caller, which is how a refused
+    /// install could look like a finished one.
     func install(_ descriptor: ModelDescriptor) async throws {
-        guard installTask == nil else { return }
+        guard installTask == nil else { throw ModelManagerError.installInProgress }
+        guard activationTask == nil else { throw ModelManagerError.activationInProgress }
+        lastError = nil
         progress[descriptor.id] = 0
 
         // Loading an engine is what downloads it, so install is "load, then
@@ -99,10 +127,15 @@ final class ModelManager {
         guard progress[descriptor.id] == nil else {
             throw ModelManagerError.deletingWhileInstalling
         }
+        // Same argument for activation: removing files under an engine that is
+        // mid-load, or under a rollback about to reload the previous model,
+        // corrupts work already in flight.
+        guard activationTask == nil else {
+            throw ModelManagerError.activationInProgress
+        }
 
         if preferences.activeModelID == descriptor.id {
-            activeEngine?.unload()
-            activeEngine = nil
+            unloadActiveEngine()
             preferences.activeModelID = nil
         }
         switch descriptor.source {
@@ -116,7 +149,27 @@ final class ModelManager {
         }
     }
 
-    /// Switches the active model. Unloads the current engine before loading
+    /// Switches the active model, one at a time.
+    ///
+    /// Serialized the way `install` is: a large model takes seconds to load,
+    /// and two overlapping calls would both unload, both build an engine, and
+    /// both write `activeEngine`/`activeModelID` — so one call's rollback
+    /// could clear a selection the other had just committed. A second call
+    /// while one is in flight throws instead of running a racing body.
+    func makeActive(_ descriptor: ModelDescriptor) async throws {
+        guard activationTask == nil else { throw ModelManagerError.activationInProgress }
+        lastError = nil
+        let task = Task { try await self.activate(descriptor) }
+        activationTask = task
+        activatingModelID = descriptor.id
+        defer {
+            activationTask = nil
+            activatingModelID = nil
+        }
+        try await task.value
+    }
+
+    /// Unloads the current engine before loading
     /// the new one — only one model's weights are ever resident at once.
     ///
     /// The persisted `activeModelID` is only written once the new engine has
@@ -127,15 +180,14 @@ final class ModelManager {
     /// reload fails, the selection is cleared to nil rather than left
     /// dangling: the invariant is that `activeModelID` names a model whose
     /// engine is actually loaded, or nothing.
-    func makeActive(_ descriptor: ModelDescriptor) async throws {
+    private func activate(_ descriptor: ModelDescriptor) async throws {
         let previousID = preferences.activeModelID
-        activeEngine?.unload()
-        activeEngine = nil
+        unloadActiveEngine()
 
         do {
             let engine = engineFactory(descriptor) { _ in }
             try await engine.load()
-            activeEngine = engine
+            setActiveEngine(engine, id: descriptor.id)
             preferences.activeModelID = descriptor.id
         } catch {
             lastError = error.localizedDescription
@@ -147,7 +199,7 @@ final class ModelManager {
                 do {
                     let restored = engineFactory(previousDescriptor) { _ in }
                     try await restored.load()
-                    activeEngine = restored
+                    setActiveEngine(restored, id: previousID)
                 } catch {
                     preferences.activeModelID = nil
                 }
@@ -160,6 +212,7 @@ final class ModelManager {
 
     /// Called at launch so the first dictation does not pay a cold start.
     func loadActiveEngine() async {
+        lastError = nil
         do {
             try await loadActiveEngineThrowing()
         } catch {
@@ -172,12 +225,29 @@ final class ModelManager {
               let descriptor = ModelCatalog.descriptor(id: id),
               isInstalled(descriptor)
         else {
-            activeEngine = nil
+            unloadActiveEngine()
             return
         }
+        // Onboarding's install already activated this exact model, so at the
+        // end of a first run its engine is loaded and reloading it would pay a
+        // second cold start for nothing.
+        if let engine = activeEngine, loadedEngineID == id, engine.isLoaded { return }
+        // Unload first: loading a second engine while the outgoing one is
+        // still resident would hold two full models' weights at once.
+        unloadActiveEngine()
         let engine = engineFactory(descriptor) { _ in }
         try await engine.load()
+        setActiveEngine(engine, id: descriptor.id)
+    }
+
+    private func setActiveEngine(_ engine: TranscriptionEngine?, id: String?) {
         activeEngine = engine
+        loadedEngineID = id
+    }
+
+    private func unloadActiveEngine() {
+        activeEngine?.unload()
+        setActiveEngine(nil, id: nil)
     }
 
     // Touches no MainActor-isolated state (no `self`, no `progress`/`activeEngine`),

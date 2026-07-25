@@ -20,11 +20,15 @@ enum CaretLocator {
 
         let system = AXUIElementCreateSystemWide()
         var focusedRef: CFTypeRef?
+        // Bind the ref before asking for its type: `CFGetTypeID` takes an
+        // implicitly unwrapped argument and traps on nil, and every failure
+        // path in here is contracted to degrade to "no caret" instead.
         guard AXUIElementCopyAttributeValue(
             system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-            CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
+            let focusedValue = focusedRef,
+            CFGetTypeID(focusedValue) == AXUIElementGetTypeID()
         else { return CaretLocation(rectQuartz: nil, pid: frontPID) }
-        let focused = focusedRef as! AXUIElement
+        let focused = focusedValue as! AXUIElement
 
         var elementPID: pid_t = 0
         AXUIElementGetPid(focused, &elementPID)

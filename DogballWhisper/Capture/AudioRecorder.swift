@@ -5,6 +5,17 @@ struct RecordedAudio: Equatable {
     let duration: TimeInterval
 }
 
+enum AudioRecorderError: LocalizedError, Equatable {
+    case couldNotStart
+
+    var errorDescription: String? {
+        switch self {
+        case .couldNotStart:
+            return "Could not start recording. Check that no other app is using the microphone."
+        }
+    }
+}
+
 protocol AudioRecording: AnyObject {
     var levels: [Float] { get }
     func start() throws
@@ -68,7 +79,13 @@ final class AudioRecorder: AudioRecording {
 
         let recorder = try AVAudioRecorder(url: url, settings: settings)
         recorder.isMeteringEnabled = true
-        recorder.record()
+        // A discarded `record()` result turns a refused start into a silent
+        // zero-length recording, which the sub-300ms rule then throws away
+        // with no message at all. Fail loudly instead.
+        guard recorder.record() else {
+            try? FileManager.default.removeItem(at: url)
+            throw AudioRecorderError.couldNotStart
+        }
 
         self.recorder = recorder
         self.fileURL = url

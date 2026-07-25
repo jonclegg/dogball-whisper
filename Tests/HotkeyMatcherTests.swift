@@ -21,6 +21,19 @@ final class HotkeyMatcherTests: XCTestCase {
         XCTAssertFalse(matcher.isEngaged)
     }
 
+    // The alternate/command/shift masks are side-agnostic, so while the left
+    // key is also held the right key's *release* still reports the mask set.
+    // Deciding began/ended from the flag alone therefore missed the release
+    // entirely (hold left ⌥, tap right ⌥), and the coordinator stayed in
+    // .recording forever: mic hot, panel up, every later press refused.
+    func testReleaseIsReportedEvenWhileTheOppositeSideKeyHoldsTheSameFlag() {
+        var matcher = HotkeyMatcher(binding: .rightOption)
+
+        XCTAssertEqual(matcher.handle(.flagsChanged(keyCode: 61, flags: [.maskAlternate])), .began)
+        XCTAssertEqual(matcher.handle(.flagsChanged(keyCode: 61, flags: [.maskAlternate])), .ended)
+        XCTAssertFalse(matcher.isEngaged)
+    }
+
     // Holding shift and then pressing right option is a different gesture;
     // starting there would hijack real shortcuts.
     func testDoesNotBeginWhenAnotherModifierIsAlreadyHeld() {

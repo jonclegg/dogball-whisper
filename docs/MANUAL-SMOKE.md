@@ -20,9 +20,16 @@ rebuilding it for each one.
 
 ## 1. First run and permissions
 
-- [ ] Fresh install (or delete `~/Library/Application Support/DogballWhisper`
-      and reset permissions with `tccutil reset All com.jonclegg.DogballWhisper`):
-      launching shows the setup window, not the dictation panel
+- [ ] Fresh install, or the full reset below, then launch: the setup window
+      appears, not the dictation panel. All four commands matter. Leaving the
+      preferences plist behind keeps the onboarding flag and the active model,
+      and leaving `FluidAudio` behind keeps the whole Parakeet download, so
+      skipping either leaves you testing a returning launch, not a first run:
+
+          rm -rf ~/Library/Application\ Support/DogballWhisper
+          rm -rf ~/Library/Application\ Support/FluidAudio
+          defaults delete com.jonclegg.DogballWhisper
+          tccutil reset All com.jonclegg.DogballWhisper
 - [ ] Grant Microphone from the setup window: the row turns green immediately
 - [ ] Grant Input Monitoring from the setup window: macOS offers to quit and
       reopen the app; the hotkey does not work until you accept that
@@ -30,6 +37,12 @@ rebuilding it for each one.
       a second (it is polled, not pushed)
 - [ ] Download the default model from the setup window: progress advances,
       then "Start dictating" becomes enabled
+- [ ] **(never verified)** Installed but not active: with the model files
+      already downloaded, run `defaults delete com.jonclegg.DogballWhisper`
+      and relaunch. The model row offers a "Use" button rather than a bare
+      checkmark, and clicking it enables "Start dictating". A checkmark with
+      no control there would be a dead end, since finishing needs an *active*
+      model, not just an installed one
 - [ ] **(never verified)** Close the setup window with the titlebar's red
       button before finishing: the window disappears, the app does not quit,
       and the menu bar shows a "Finish setup…" item above the separator
@@ -81,6 +94,12 @@ the same apps.
 - [ ] Terminal: text lands at the prompt
 - [ ] Slack or Discord message box: text lands, no stray newline sent
 - [ ] Browser text field (Chrome or Safari): text lands
+- [ ] **(never verified)** Focus-change gate: start dictating into TextEdit,
+      then ⌘-Tab to another app *before* releasing the key. Nothing is pasted
+      into the app you switched to, the panel says the text was copied to the
+      clipboard, and ⌘V in TextEdit afterward pastes it. The spec calls
+      pasting into the wrong window the one unrecoverable failure mode, and
+      no test covers this gate, so it is only ever checked here
 
 ## 4. Clipboard behavior
 
@@ -97,6 +116,13 @@ the same apps.
       quickly for two short phrases): the second dictation's text is what
       ends up pasted, and the first dictation's pending clipboard restore
       does not overwrite it afterward
+- [ ] **(never verified)** Promised or lazy clipboard payload: copy a file
+      from Finder (a file promise) or a large image from Preview, then
+      dictate. Nothing stalls while the snapshot resolves every declared
+      type, the dictated text lands, and ⌘V afterward still pastes the
+      original file or image, not a placeholder. This is the one clipboard
+      shape `PasteboardSnapshot` cannot capture lazily, so it forces every
+      type to resolve up front
 
 ## 5. Panel placement
 
@@ -132,13 +158,24 @@ the same apps.
 - [ ] **(never verified)** While a model is downloading, kill the network
       (Wi-Fi off, or unplug ethernet) partway through: Settings shows a
       visible error rather than a silently stuck progress bar. Restore the
-      network and retry the install: it succeeds
+      network and retry the install: it resumes from where it stopped rather
+      than starting over, it succeeds, and the error message disappears
+      instead of sitting next to the finished model
 - [ ] Delete a model: it returns to Not installed and its files are gone
       from `~/Library/Application Support/DogballWhisper/Models` (Whisper
       variants; Parakeet's own mirror-managed folder lives alongside it,
       see `ModelCatalog.installedLocation`)
 - [ ] Quit mid-download, relaunch, download again: it resumes rather than
-      restarting from zero
+      restarting from zero. Progress picks up near the fraction it stopped at
+      instead of 0%, and the `.partial` file in the model directory keeps
+      growing from the size it already had. Do this well into the download so
+      you are inside `Encoder.mlmodelc/weights/weight.bin`, which is 92% of
+      the payload and the only file where whole-file resume would have been
+      indistinguishable from starting over
+- [ ] **(never verified)** Click "Use" on a large model and watch the row
+      while it loads: a spinner replaces the button, and Install, Use, and
+      Delete are disabled on every row until the load finishes. Double-clicking
+      "Use" must not start two activations
 - [ ] **(never verified)** With two models installed, switch the active one
       in Settings, then open the menu bar menu without touching Settings
       again: the name shown is the newly active model, not the previous one
@@ -156,7 +193,26 @@ the same apps.
       property; if it ever fails, check that neither changed
 - [ ] No Dock icon and no window at launch once onboarding is done
 
-## 9. Microphone integration test
+## 9. Latency
+
+The spec's budget is under 1.5 seconds from key release to inserted text for
+a five-second utterance, with cleanup enabled. Nothing in the suite measures
+this, so measure it here, on the active model you actually ship with.
+
+- [ ] **(never verified)** Dictate a five-second sentence into TextEdit and
+      time from the moment you let go of the key to the moment the text
+      appears: under 1.5 seconds. Do it three times and take the worst, not
+      the best. If it misses, note which stage is slow (the panel shows
+      "Transcribing" and "Polishing" separately) rather than just the total
+- [ ] **(never verified)** Same measurement on a cold start (first dictation
+      after launch): slower is expected, but note the number, since that is
+      the one a new user sees first
+- [ ] **(never verified)** No clipped first word: press the key and start
+      talking immediately, with no pause. The first word is in the transcript.
+      Recording starts before the panel animates, so it should be, but the
+      microphone's own warm-up is the risk here
+
+## 10. Microphone integration test
 
 The audio pipeline has an XCTest that talks to the real microphone. It is
 gated because it needs an actual mic permission grant for the *test host*

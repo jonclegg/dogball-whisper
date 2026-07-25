@@ -41,6 +41,65 @@ final class ModelMirrorIntegrationTests: XCTestCase {
         XCTAssertTrue(path.contains("Application Support/FluidAudio/Models/some-model"), path)
     }
 
+    // MARK: Resume decision (pure, no network)
+
+    // Resume has to work at byte granularity, not whole-file granularity: one
+    // file in the manifest is 92% of the payload, so restarting it from zero
+    // after an interruption is effectively restarting the whole download.
+
+    func testNoPartialMeansAFreshRequest() {
+        XCTAssertEqual(ModelMirror.resumePlan(partialBytes: nil, expectedBytes: 100), .fresh)
+    }
+
+    func testAnEmptyPartialMeansAFreshRequest() {
+        XCTAssertEqual(ModelMirror.resumePlan(partialBytes: 0, expectedBytes: 100), .fresh)
+    }
+
+    func testAShortPartialResumesFromItsEnd() {
+        XCTAssertEqual(
+            ModelMirror.resumePlan(partialBytes: 40, expectedBytes: 100), .resume(offset: 40))
+    }
+
+    func testAFullSizePartialNeedsNoRequestAtAll() {
+        XCTAssertEqual(ModelMirror.resumePlan(partialBytes: 100, expectedBytes: 100), .complete)
+    }
+
+    // Too many bytes means the file on disk is not a prefix of what we are
+    // fetching, so there is nothing to resume from.
+    func testAnOversizedPartialStartsOver() {
+        XCTAssertEqual(ModelMirror.resumePlan(partialBytes: 140, expectedBytes: 100), .fresh)
+    }
+
+    // MARK: Content-Range validation
+
+    // Appending a body that starts anywhere other than where we asked would
+    // corrupt the file, and the final size check would not notice.
+
+    func testContentRangeMatchingTheRequestIsHonored() {
+        XCTAssertTrue(
+            ModelMirror.rangeIsHonored(contentRange: "bytes 40-99/100", offset: 40, expectedBytes: 100))
+    }
+
+    func testContentRangeStartingElsewhereIsRejected() {
+        XCTAssertFalse(
+            ModelMirror.rangeIsHonored(contentRange: "bytes 0-99/100", offset: 40, expectedBytes: 100))
+    }
+
+    func testContentRangeForADifferentlySizedFileIsRejected() {
+        XCTAssertFalse(
+            ModelMirror.rangeIsHonored(contentRange: "bytes 40-79/80", offset: 40, expectedBytes: 100))
+    }
+
+    func testMissingOrMalformedContentRangeIsRejected() {
+        XCTAssertFalse(ModelMirror.rangeIsHonored(contentRange: nil, offset: 40, expectedBytes: 100))
+        XCTAssertFalse(
+            ModelMirror.rangeIsHonored(contentRange: "40-99/100", offset: 40, expectedBytes: 100))
+        XCTAssertFalse(
+            ModelMirror.rangeIsHonored(contentRange: "bytes */100", offset: 40, expectedBytes: 100))
+        XCTAssertFalse(
+            ModelMirror.rangeIsHonored(contentRange: "bytes 40-99", offset: 40, expectedBytes: 100))
+    }
+
     // Live download against CloudFront. Reports progress, verifies every file's
     // size, and resumes rather than restarting when files are already present.
     // Run with: RUN_MIRROR_IT=1 ./scripts/test.sh DogballWhisperTests/ModelMirrorIntegrationTests

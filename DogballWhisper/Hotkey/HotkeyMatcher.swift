@@ -76,15 +76,20 @@ struct HotkeyMatcher {
             let others = flags.subtracting(targetMask)
 
             if keyCode == binding.keyCode {
-                if flags.contains(targetMask) {
-                    guard !isEngaged, others.isEmpty else { return nil }
-                    isEngaged = true
-                    return .began
-                } else {
-                    guard isEngaged else { return nil }
+                // While engaged, a flagsChanged for our own key can only be a
+                // release: modifiers do not auto-repeat and cannot go down
+                // twice without a release in between. Deciding by the flag
+                // instead would wedge the dictation open forever whenever the
+                // *other* physical key for the same mask is also held (hold
+                // left ⌥, tap right ⌥: the release still carries
+                // .maskAlternate, because these masks are side-agnostic).
+                if isEngaged {
                     isEngaged = false
                     return .ended
                 }
+                guard flags.contains(targetMask), others.isEmpty else { return nil }
+                isEngaged = true
+                return .began
             }
 
             // A different modifier changed while we were engaged.

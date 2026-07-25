@@ -120,9 +120,24 @@ struct OnboardingView: View {
                         switch models.state(for: descriptor) {
                         case .notInstalled:
                             Button("Download") { Task { try? await models.install(descriptor) } }
+                                .disabled(models.isBusy)
                         case let .downloading(fraction):
                             ProgressView(value: fraction).frame(width: 120)
-                        case .installed, .active:
+                        case .installed:
+                            // Installed but not active is reachable (the
+                            // automatic activation after a download can fail
+                            // on its own, and preferences can be reset with
+                            // the files still in place), and "Start dictating"
+                            // needs an *active* model. Without a control here
+                            // that state is a dead end: a checkmark above a
+                            // permanently disabled button.
+                            if models.activatingModelID == descriptor.id {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Button("Use") { Task { try? await models.makeActive(descriptor) } }
+                                    .disabled(models.isBusy)
+                            }
+                        case .active:
                             Label("Installed", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
                         }

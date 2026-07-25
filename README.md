@@ -60,8 +60,17 @@ changing either forces every user to re-grant everything.
 
 Parakeet V3 (the default) downloads from a privately hosted CloudFront
 mirror. The four Whisper variants download from WhisperKit's HuggingFace
-repo. Both land in the app's Application Support directory, managed one at
-a time by `Transcribe/ModelManager.swift`.
+repo. They land in different places, and that is deliberate:
+
+- Whisper variants go to
+  `~/Library/Application Support/DogballWhisper/Models/`.
+- Parakeet goes to
+  `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3/`,
+  because FluidAudio loads it from its own cache directory and cannot be
+  pointed at ours.
+
+Either way, downloads run one at a time and are resumable at byte
+granularity, managed by `Transcribe/ModelManager.swift`.
 
 ## Layout
 
