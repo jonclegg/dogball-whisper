@@ -1,8 +1,12 @@
 # Dogball Whisper
 
-A menu-bar dictation client for macOS. Hold right ⌥, talk, let go, and the
-text appears wherever you were typing. Transcription runs on this Mac; an
-optional OpenRouter pass strips ums and ahs.
+MacWhisper is great, but it's buggy and bloated. I tried a dozen different
+projects here on GitHub and none of them did what I wanted, so I threw this
+one together. Hope you enjoy.
+
+Hold right ⌥, talk, let go, and the text appears wherever you were typing.
+It lives in the menu bar, transcription runs on your Mac, and an optional
+cleanup pass strips the ums and ahs.
 
 ## Download
 

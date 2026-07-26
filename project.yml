@@ -37,6 +37,10 @@ targets:
         SWIFT_VERSION: "5.10"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
+        # An accessory app has no Dock icon, but this is still what Finder and
+        # the System Settings privacy lists show next to the app's name when
+        # someone decides whether to grant it Accessibility.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Dogball Whisper records your voice while you hold the dictation key, and transcribes it on this Mac."
         CODE_SIGN_STYLE: Manual
